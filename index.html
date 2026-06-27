@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Experiment Barbarian Field Sheet</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="site-header">
+        <div>
+          <p class="eyebrow">Crooked Moon Field Record</p>
+          <h1 class="character-title">
+            <button id="characterNameDisplay" class="title-display" type="button">Experiment Barbarian</button>
+            <input id="characterNameInput" class="title-input" type="text" aria-label="Character name" />
+          </h1>
+        </div>
+        <div class="header-actions">
+          <div class="view-tabs" role="tablist" aria-label="Sheet views">
+            <button class="view-tab-button active" data-view-tab="sheet" type="button">Character Sheet</button>
+            <button class="view-tab-button" data-view-tab="combat" type="button">Combat</button>
+            <button class="view-tab-button" data-view-tab="notes" type="button">Notes</button>
+          </div>
+          <button class="ghost-button" id="exportData" type="button">Export</button>
+          <label class="ghost-button file-label" for="importData">Import</label>
+          <input id="importData" type="file" accept="application/json" />
+          <button class="danger-button" id="resetData" type="button">Reset</button>
+        </div>
+      </header>
+
+      <main class="dashboard">
+        <section class="panel character-panel" data-views="sheet combat" data-title="Character" data-rage-title="I WILL NEVER DIE">
+          <div class="panel-heading">
+            <h2>Character</h2>
+            <span class="stitch"></span>
+          </div>
+          <div class="hp-hero">
+            <div class="hp-adjust-group" aria-label="Decrease hit points">
+              <button class="small-button hp-adjust-button" data-hp-adjust="-1" type="button">-1</button>
+              <button class="small-button hp-adjust-button" data-hp-adjust="-5" type="button">-5</button>
+            </div>
+            <label class="field hp-main-field">
+              <span>Current HP</span>
+              <input class="hp-main-input" data-path="character.hp" type="number" inputmode="numeric" />
+            </label>
+            <div class="hp-adjust-group" aria-label="Increase hit points">
+              <button class="small-button hp-adjust-button" data-hp-adjust="1" type="button">+1</button>
+              <button class="small-button hp-adjust-button" data-hp-adjust="5" type="button">+5</button>
+            </div>
+          </div>
+          <div class="meter-grid hp-supporting-grid">
+            <label class="field">
+              <span>Temp HP</span>
+              <input data-path="character.tempHp" type="number" inputmode="numeric" />
+            </label>
+            <label class="field">
+              <span>Total HP</span>
+              <input data-path="character.totalHp" type="number" inputmode="numeric" />
+            </label>
+          </div>
+          <div class="hit-dice-row">
+            <label class="field">
+              <span>Hit Dice Remaining</span>
+              <input data-path="character.hitDiceRemaining" type="number" inputmode="numeric" />
+            </label>
+            <label class="field">
+              <span>Hit Dice Type</span>
+              <select data-path="character.hitDiceType">
+                <option value="d4">d4</option>
+                <option value="d6">d6</option>
+                <option value="d8">d8</option>
+                <option value="d10">d10</option>
+                <option value="d12">d12</option>
+                <option value="d20">d20</option>
+              </select>
+            </label>
+          </div>
+          <div class="character-footer">
+            <label class="field character-meta-field character-speed-field">
+              <span>Speed</span>
+              <input data-path="character.speed" type="number" inputmode="numeric" />
+            </label>
+            <div class="character-footer-right">
+              <label class="field character-meta-field">
+                <span>Level</span>
+                <input data-path="character.level" type="number" inputmode="numeric" />
+              </label>
+              <label class="field character-meta-field">
+                <span>Prof</span>
+                <input id="proficiencyBonus" type="number" inputmode="numeric" />
+              </label>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel rage-panel" data-views="combat" data-title="Rage" data-rage-title="FURY UNCHAINED">
+          <div class="panel-heading">
+            <h2>Rage</h2>
+            <span class="stitch"></span>
+          </div>
+          <div class="rage-status">
+            <button class="rage-button" id="rageToggleButton" type="button">GO INTO A RAGE</button>
+            <label class="field rage-counter-field">
+              <span>Total Rages</span>
+              <input data-path="rage.total" type="number" inputmode="numeric" />
+            </label>
+            <label class="field rage-counter-field">
+              <span>Rages Used</span>
+              <input data-path="rage.used" type="number" inputmode="numeric" />
+            </label>
+          </div>
+          <div class="subheading">
+            <h3>Experiment Rage Serum</h3>
+          </div>
+          <div class="list" id="rageTypes"></div>
+        </section>
+
+        <section class="panel skills-panel" data-views="sheet">
+          <div class="panel-heading">
+            <h2>Skills</h2>
+            <span class="stitch"></span>
+          </div>
+          <div class="skills-grid" id="skillsGrid"></div>
+        </section>
+
+        <section class="panel actions-panel" data-views="combat" data-title="Actions & Attacks" data-rage-title="ARRRR ATTACK!">
+          <div class="panel-heading">
+            <h2>Actions & Attacks</h2>
+            <button class="reckless-button" id="recklessToggle" type="button">Reckless!</button>
+            <div class="panel-actions">
+              <button class="small-button" id="collapseActions" type="button" title="Collapse all" aria-label="Collapse all">-</button>
+              <button class="small-button" id="addAction" type="button">Add Action</button>
+            </div>
+          </div>
+          <div class="table-list" id="actionsList"></div>
+        </section>
+
+        <section class="panel inventory-panel" data-views="sheet">
+          <div class="panel-heading">
+            <h2>Inventory</h2>
+            <div class="panel-actions">
+              <button class="small-button" id="clearInventoryFilter" type="button" hidden>Clear Filter</button>
+              <button class="small-button" id="toggleHiddenInventory" type="button">Show Hidden</button>
+              <button class="small-button" id="sortInventory" type="button">Sort A-Z</button>
+              <button class="small-button" id="addInventory" type="button">Add Item</button>
+            </div>
+          </div>
+          <div class="inventory-search-card">
+            <label class="field">
+              <span>Search Equipment</span>
+              <input id="inventorySearchInput" type="search" placeholder="Search names first, then descriptions" />
+            </label>
+            <div class="inventory-search-results" id="inventorySearchResults"></div>
+          </div>
+          <div class="table-list inventory-grid" id="inventoryList"></div>
+        </section>
+
+        <section class="panel abilities-panel" data-views="sheet combat" data-title="Abilities" data-rage-title="UNLEASHED ABILITIES">
+          <div class="panel-heading">
+            <h2>Abilities</h2>
+            <div class="panel-actions">
+              <button class="small-button" id="collapseAbilities" type="button" title="Collapse all" aria-label="Collapse all">-</button>
+              <button class="small-button" id="addAbility" type="button">Add Ability</button>
+            </div>
+          </div>
+          <div class="table-list" id="abilitiesList"></div>
+        </section>
+
+        <section class="panel status-panel" data-views="sheet combat" data-title="Statuses" data-rage-title="WHAT HURTS NOW">
+          <div class="panel-heading">
+            <h2>Statuses</h2>
+            <div class="panel-actions">
+              <button class="small-button" id="toggleInactiveStatuses" type="button">Show Inactive</button>
+              <button class="small-button" id="addStatus" type="button">Add Status</button>
+            </div>
+          </div>
+          <div class="table-list compact" id="statusesList"></div>
+        </section>
+
+        <section class="panel notes-panel" data-views="notes">
+          <div class="panel-heading">
+            <h2>Notes</h2>
+            <span class="stitch"></span>
+          </div>
+          <div class="scratch-pad-card">
+            <label class="field">
+              <span>Current Session Scratch Pad</span>
+              <textarea
+                data-path="notes.sessionScratchPad"
+                placeholder="Drop in initiative reminders, NPC names, clues, loot, or whatever else you need during the session."
+              ></textarea>
+            </label>
+          </div>
+          <div class="notes-search-card">
+            <label class="field">
+              <span>Search Knowledge</span>
+              <input id="noteSearchInput" type="search" placeholder="Search titles first, then details" />
+            </label>
+            <div class="note-search-results" id="noteSearchResults"></div>
+          </div>
+          <div class="notes-toolbar">
+            <div class="note-tabs" role="tablist" aria-label="Note categories">
+              <button class="tab-button active" data-note-tab="locations" type="button">Locations</button>
+              <button class="tab-button" data-note-tab="people" type="button">People</button>
+              <button class="tab-button" data-note-tab="plot" type="button">Plot</button>
+              <button class="tab-button" data-note-tab="backstory" type="button">Character</button>
+            </div>
+            <div class="notes-actions">
+              <button class="small-button" id="clearNoteFilter" type="button" hidden>Clear Filter</button>
+              <button class="small-button" id="toggleHiddenNotes" type="button">Show Hidden</button>
+              <button class="small-button" id="sortNotes" type="button">Sort A-Z</button>
+              <button class="small-button" id="collapseNotes" type="button" title="Collapse all" aria-label="Collapse all">-</button>
+              <button class="small-button" id="addNote" type="button">Add Knowledge</button>
+            </div>
+          </div>
+          <div class="knowledge-list" id="notesList"></div>
+          <div class="subheading session-notes-heading">
+            <h3>Session Notes</h3>
+            <div class="panel-actions">
+              <button class="small-button" id="toggleSessionNotesCollapse" type="button">Collapse All</button>
+              <button class="small-button" id="addSessionNote" type="button">Add Session Note</button>
+            </div>
+          </div>
+          <div class="session-notes-list" id="sessionNotesList"></div>
+        </section>
+      </main>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
