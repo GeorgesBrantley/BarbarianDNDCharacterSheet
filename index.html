@@ -39,7 +39,7 @@
           <div class="header-utility-actions">
             <button class="ghost-button" id="undoDelete" type="button" hidden>Undo Delete</button>
             <button class="ghost-button" id="restoreBackup" type="button">Restore Backup</button>
-            <button class="ghost-button" id="exportData" type="button">Export</button>
+            <button class="ghost-button" id="exportData" type="button">Export to Saves</button>
             <label class="ghost-button file-label" for="importData">Import</label>
             <input id="importData" type="file" accept="application/json" />
             <button class="danger-button" id="resetData" type="button">Reset</button>
@@ -74,18 +74,29 @@
           </div>
           <div id="characterTabPanel" data-character-tab-panel="character" role="tabpanel" aria-labelledby="characterTab">
             <div class="hp-hero">
-              <div class="hp-adjust-group" aria-label="Decrease hit points">
-                <button class="small-button hp-adjust-button" data-hp-adjust="-1" type="button">-1</button>
-                <button class="small-button hp-adjust-button" data-hp-adjust="-5" type="button">-5</button>
+              <div class="hp-control-cluster">
+                <div class="hp-adjust-group" aria-label="Decrease hit points">
+                  <button class="small-button hp-adjust-button" data-hp-adjust="-1" type="button">-1</button>
+                  <button class="small-button hp-adjust-button" data-hp-adjust="-5" type="button">-5</button>
+                </div>
+                <label class="field hp-main-field">
+                  <span>Current HP</span>
+                  <input class="hp-main-input" data-path="character.hp" type="number" inputmode="numeric" />
+                </label>
+                <div class="hp-adjust-group" aria-label="Increase hit points">
+                  <button class="small-button hp-adjust-button" data-hp-adjust="1" type="button">+1</button>
+                  <button class="small-button hp-adjust-button" data-hp-adjust="5" type="button">+5</button>
+                </div>
               </div>
-              <label class="field hp-main-field">
-                <span>Current HP</span>
-                <input class="hp-main-input" data-path="character.hp" type="number" inputmode="numeric" />
-              </label>
-              <div class="hp-adjust-group" aria-label="Increase hit points">
-                <button class="small-button hp-adjust-button" data-hp-adjust="1" type="button">+1</button>
-                <button class="small-button hp-adjust-button" data-hp-adjust="5" type="button">+5</button>
-              </div>
+              <button class="ac-shield-button" id="acShieldButton" type="button" aria-label="Armor Class 10. Edit Armor Class">
+                <svg class="ac-shield-shape" viewBox="0 0 80 96" aria-hidden="true">
+                  <path d="M40 3 72 14v29c0 22-12 38-32 50C20 81 8 65 8 43V14Z"></path>
+                </svg>
+                <span class="ac-shield-content">
+                  <span class="ac-shield-label">AC</span>
+                  <strong id="acShieldValue">10</strong>
+                </span>
+              </button>
             </div>
             <div class="meter-grid hp-supporting-grid">
               <label class="field">
@@ -130,12 +141,12 @@
                   </select>
                 </label>
                 <label class="field">
-                  <span>Current</span>
-                  <input data-path="character.hitDiceRemaining" type="number" inputmode="numeric" min="0" step="1" />
+                  <span>Used</span>
+                  <input data-path="character.hitDiceUsed" type="number" inputmode="numeric" min="0" step="1" />
                 </label>
                 <label class="field">
-                  <span>Max</span>
-                  <input data-path="character.hitDiceMax" type="number" inputmode="numeric" min="1" max="20" step="1" />
+                  <span>Total</span>
+                  <input data-path="character.hitDiceTotal" type="number" inputmode="numeric" min="1" max="20" step="1" />
                 </label>
               </div>
               <div class="rest-hit-dice-row">
@@ -152,13 +163,44 @@
                   </select>
                 </label>
                 <label class="field">
-                  <span>Current</span>
-                  <input data-path="character.hitDiceSecondaryRemaining" type="number" inputmode="numeric" min="0" step="1" />
+                  <span>Used</span>
+                  <input data-path="character.hitDiceSecondaryUsed" type="number" inputmode="numeric" min="0" step="1" />
                 </label>
                 <label class="field">
-                  <span>Max</span>
-                  <input data-path="character.hitDiceSecondaryMax" type="number" inputmode="numeric" min="1" max="20" step="1" />
+                  <span>Total</span>
+                  <input data-path="character.hitDiceSecondaryTotal" type="number" inputmode="numeric" min="1" max="20" step="1" />
                 </label>
+              </div>
+            </div>
+            <div class="rest-actions">
+              <div class="fighter-button-wrap rest-action-wrap">
+                <button
+                  class="rage-button rest-action-button short-rest-button"
+                  id="shortRestButton"
+                  type="button"
+                  aria-describedby="shortRestTooltip"
+                >Short Rest</button>
+                <div class="feature-tooltip rest-tooltip" id="shortRestTooltip" role="tooltip">
+                  <ul>
+                    <li>Use Hit Dice to Heal</li>
+                    <li>Regain one Rage</li>
+                    <li>Regain one Second Wind</li>
+                  </ul>
+                </div>
+              </div>
+              <div class="fighter-button-wrap rest-action-wrap">
+                <button
+                  class="rage-button rest-action-button long-rest-button"
+                  id="longRestButton"
+                  type="button"
+                  aria-describedby="longRestTooltip"
+                >Long Rest</button>
+                <div class="feature-tooltip rest-tooltip" id="longRestTooltip" role="tooltip">
+                  <ul>
+                    <li>Completely heal to max HP</li>
+                    <li>Regain all Rage, Hit Dice, and Second Winds to max</li>
+                  </ul>
+                </div>
               </div>
             </div>
           </div>
@@ -170,20 +212,133 @@
             <span class="stitch"></span>
           </div>
           <div class="rage-status">
-            <button class="rage-button" id="rageToggleButton" type="button">GO INTO A RAGE</button>
-            <label class="field rage-counter-field">
-              <span>Total Rages</span>
-              <input data-path="rage.total" type="number" inputmode="numeric" />
-            </label>
-            <label class="field rage-counter-field">
-              <span>Rages Used</span>
-              <input data-path="rage.used" type="number" inputmode="numeric" />
-            </label>
+            <div class="fighter-feature rage-feature">
+              <div class="fighter-button-wrap">
+                <button
+                  class="rage-button fighter-feature-button"
+                  id="rageToggleButton"
+                  type="button"
+                  aria-describedby="rageTooltip"
+                >GO INTO A RAGE</button>
+                <div class="feature-tooltip rage-tooltip" id="rageTooltip" role="tooltip">
+                  <p>
+                    You can enter your Rage the number of times shown for your Barbarian level in the Rages column of the
+                    Barbarian Features table. You regain one expended use when you finish a
+                    <a href="https://5e.tools/variantrules.html#short%20rest_xphb" target="_blank" rel="noopener noreferrer">Short Rest</a>,
+                    and you regain all expended uses when you finish a
+                    <a href="https://5e.tools/variantrules.html#long%20rest_xphb" target="_blank" rel="noopener noreferrer">Long Rest</a>.
+                  </p>
+                  <p>While active, your Rage follows the rules below.</p>
+                  <p>
+                    <strong>Damage Resistance.</strong> You have
+                    <a href="https://5e.tools/variantrules.html#resistance_xphb" target="_blank" rel="noopener noreferrer">Resistance</a>
+                    to Bludgeoning, Piercing, and Slashing damage.
+                  </p>
+                  <p>
+                    <strong>Rage Damage.</strong> When you make an attack using Strength—with either a weapon or an
+                    <a href="https://5e.tools/variantrules.html#unarmed%20strike_xphb" target="_blank" rel="noopener noreferrer">Unarmed Strike</a>—and
+                    deal damage to the target, you gain a bonus to the damage that increases as you gain levels as a
+                    Barbarian, as shown in the Rage Damage column of the Barbarian Features table.
+                  </p>
+                  <p>
+                    <strong>Strength Advantage.</strong> You have
+                    <a href="https://5e.tools/variantrules.html#advantage_xphb" target="_blank" rel="noopener noreferrer">Advantage</a>
+                    on Strength checks and Strength saving throws.
+                  </p>
+                  <p>
+                    <strong>No Concentration or Spells.</strong> You can't maintain
+                    <a href="https://5e.tools/conditionsdiseases.html#concentration_xphb" target="_blank" rel="noopener noreferrer">Concentration</a>,
+                    and you can't cast spells.
+                  </p>
+                  <p>
+                    <strong>Duration.</strong> The Rage lasts until the end of your next turn, and it ends early if you don
+                    Heavy armor or have the
+                    <a href="https://5e.tools/conditionsdiseases.html#incapacitated_xphb" target="_blank" rel="noopener noreferrer">Incapacitated</a>
+                    condition. If your Rage is still active on your next turn, you can extend the Rage for another round by
+                    doing one of the following:
+                  </p>
+                  <ul>
+                    <li>Make an attack roll against an enemy.</li>
+                    <li>Force an enemy to make a saving throw.</li>
+                    <li>
+                      Take a
+                      <a href="https://5e.tools/variantrules.html#bonus%20action_xphb" target="_blank" rel="noopener noreferrer">Bonus Action</a>
+                      to extend your Rage.
+                    </li>
+                  </ul>
+                  <p>Each time the Rage is extended, it lasts until the end of your next turn. You can maintain a Rage for up to 10 minutes.</p>
+                </div>
+              </div>
+              <div class="fighter-counter-row" aria-label="Rage uses">
+                <label class="field rage-counter-field">
+                  <span>Used</span>
+                  <input data-path="rage.used" type="number" inputmode="numeric" />
+                </label>
+                <span class="fighter-counter-divider" aria-hidden="true">/</span>
+                <label class="field rage-counter-field">
+                  <span>Total</span>
+                  <input data-path="rage.total" type="number" inputmode="numeric" />
+                </label>
+              </div>
+            </div>
           </div>
           <div class="subheading">
             <h3>Experiment Rage Serum</h3>
           </div>
           <div class="list" id="rageTypes"></div>
+        </section>
+
+        <section class="panel fighter-panel" data-views="combat" data-title="Fighter">
+          <div class="panel-heading">
+            <h2>Fighter</h2>
+            <span class="stitch"></span>
+          </div>
+          <div class="fighter-features">
+            <div class="fighter-feature">
+              <div class="fighter-button-wrap">
+                <button
+                  class="rage-button fighter-feature-button second-wind-button"
+                  id="secondWindButton"
+                  type="button"
+                  aria-describedby="secondWindTooltip"
+                >Second Wind</button>
+                <div class="feature-tooltip" id="secondWindTooltip" role="tooltip">
+                  As a
+                  <a href="https://5e.tools/variantrules.html#bonus%20action_xphb" target="_blank" rel="noopener noreferrer">Bonus Action</a>,
+                  you can use it to regain
+                  <a href="https://5e.tools/variantrules.html#hit%20points_xphb" target="_blank" rel="noopener noreferrer">Hit Points</a>
+                  equal to 1d10 plus your Fighter level.
+                </div>
+              </div>
+              <div class="fighter-counter-row" aria-label="Second Wind uses">
+                <label class="field rage-counter-field">
+                  <span>Used</span>
+                  <input data-path="fighter.secondWindUsed" type="number" inputmode="numeric" min="0" step="1" />
+                </label>
+                <span class="fighter-counter-divider" aria-hidden="true">/</span>
+                <label class="field rage-counter-field">
+                  <span>Total</span>
+                  <input data-path="fighter.secondWindTotal" type="number" inputmode="numeric" min="0" step="1" />
+                </label>
+              </div>
+            </div>
+            <div class="fighter-feature">
+              <button class="rage-button fighter-feature-button action-surge-button" id="actionSurgeButton" type="button">
+                Action Surge
+              </button>
+              <div class="fighter-counter-row" aria-label="Action Surge uses">
+                <label class="field rage-counter-field">
+                  <span>Used</span>
+                  <input data-path="fighter.actionSurgeUsed" type="number" inputmode="numeric" min="0" step="1" />
+                </label>
+                <span class="fighter-counter-divider" aria-hidden="true">/</span>
+                <label class="field rage-counter-field">
+                  <span>Total</span>
+                  <input data-path="fighter.actionSurgeTotal" type="number" inputmode="numeric" min="0" step="1" />
+                </label>
+              </div>
+            </div>
+          </div>
         </section>
 
         <section class="panel skills-panel" data-views="sheet">
@@ -295,6 +450,40 @@
           <div class="session-notes-list" id="sessionNotesList"></div>
         </section>
       </main>
+    </div>
+
+    <dialog class="ac-dialog" id="acDialog" aria-labelledby="acDialogTitle">
+      <form class="ac-dialog-form" id="acDialogForm" method="dialog">
+        <div class="ac-dialog-heading">
+          <div>
+            <p class="eyebrow">Defense</p>
+            <h2 id="acDialogTitle">Armor Class</h2>
+          </div>
+          <button class="ac-dialog-close" id="closeAcDialog" type="button" aria-label="Close Armor Class editor">×</button>
+        </div>
+        <label class="field">
+          <span>AC</span>
+          <input id="acValueInput" type="number" inputmode="numeric" min="0" max="99" step="1" required />
+        </label>
+        <label class="field">
+          <span>Notes</span>
+          <textarea id="acNotesInput" rows="5" placeholder="Armor, shield, bonuses, or other AC details"></textarea>
+        </label>
+        <div class="ac-dialog-actions">
+          <button class="ghost-button" id="cancelAcDialog" type="button">Cancel</button>
+          <button class="small-button" type="submit">Save AC</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div class="feature-flash-overlay" id="featureFlashOverlay" aria-hidden="true"></div>
+    <div class="rest-reminder-toast" id="restReminderToast" role="alert" aria-live="assertive" hidden>
+      <span class="rest-reminder-mark" aria-hidden="true">!</span>
+      <div class="rest-reminder-copy">
+        <strong>Long Rest Complete</strong>
+        <span>Review charges on items</span>
+      </div>
+      <button class="rest-reminder-close" id="closeRestReminder" type="button" aria-label="Close reminder">×</button>
     </div>
 
     <script src="app.js"></script>

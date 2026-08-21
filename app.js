@@ -70,11 +70,13 @@ const defaultState = {
     hp: 0,
     tempHp: 0,
     totalHp: 0,
-    hitDiceRemaining: 1,
-    hitDiceMax: 1,
+    armorClass: 10,
+    armorClassNotes: "",
+    hitDiceUsed: 0,
+    hitDiceTotal: 1,
     hitDiceType: "d12",
-    hitDiceSecondaryRemaining: 0,
-    hitDiceSecondaryMax: 1,
+    hitDiceSecondaryUsed: 0,
+    hitDiceSecondaryTotal: 1,
     hitDiceSecondaryType: "N/A",
   },
   rage: {
@@ -84,6 +86,12 @@ const defaultState = {
     choosingType: false,
     activeType: "",
     serumExpanded: {},
+  },
+  fighter: {
+    secondWindTotal: 2,
+    secondWindUsed: 0,
+    actionSurgeTotal: 0,
+    actionSurgeUsed: 0,
   },
   stats: [
     { name: "STR", value: 10, saveProficient: false, saveModifier: 0 },
@@ -164,6 +172,7 @@ let showHiddenInventory = false;
 let showHiddenNotes = false;
 let globalSearchQuery = "";
 let pendingUndoAction = null;
+let featureFlashTimer = null;
 let lastAutoBackupAt = 0;
 let lastBackupSignature = JSON.stringify(state);
 
@@ -348,30 +357,52 @@ function loadState() {
 
 function normalizeState(nextState) {
   const normalized = clone(nextState);
+  normalized.character.armorClass = clampInteger(normalized.character.armorClass, 0, 99, 10);
+  normalized.character.armorClassNotes = String(normalized.character.armorClassNotes || "");
   const hitDice = normalized.character?.hitDice;
-  if ((normalized.character.hitDiceRemaining == null || normalized.character.hitDiceType == null) && typeof hitDice === "string") {
+  if (normalized.character.hitDiceRemaining == null && typeof hitDice === "string") {
     const match = hitDice.trim().match(/^(\d+)\s*(d\d+)$/i);
     if (match) {
       normalized.character.hitDiceRemaining = Number(match[1]);
       normalized.character.hitDiceType = match[2].toLowerCase();
     }
   }
-  if (normalized.character.hitDiceRemaining == null) normalized.character.hitDiceRemaining = defaultState.character.hitDiceRemaining;
   if (normalized.character.hitDiceType == null) normalized.character.hitDiceType = defaultState.character.hitDiceType;
-  const hitDiceRemaining = clampInteger(normalized.character.hitDiceRemaining, 0, 20, 0);
-  const hitDiceMax = clampInteger(normalized.character.hitDiceMax, 1, 20, 1);
-  normalized.character.hitDiceMax = Math.max(hitDiceRemaining, hitDiceMax);
-  normalized.character.hitDiceRemaining = Math.min(hitDiceRemaining, normalized.character.hitDiceMax);
-  const hitDiceSecondaryRemaining = clampInteger(normalized.character.hitDiceSecondaryRemaining, 0, 20, 0);
-  const hitDiceSecondaryMax = clampInteger(normalized.character.hitDiceSecondaryMax, 1, 20, 1);
-  normalized.character.hitDiceSecondaryMax = Math.max(hitDiceSecondaryRemaining, hitDiceSecondaryMax);
-  normalized.character.hitDiceSecondaryRemaining = Math.min(
-    hitDiceSecondaryRemaining,
-    normalized.character.hitDiceSecondaryMax,
-  );
   if (normalized.character.hitDiceSecondaryType == null) {
     normalized.character.hitDiceSecondaryType = defaultState.character.hitDiceSecondaryType;
   }
+  [
+    {
+      usedKey: "hitDiceUsed",
+      totalKey: "hitDiceTotal",
+      remainingKey: "hitDiceRemaining",
+      maxKey: "hitDiceMax",
+      typeKey: "hitDiceType",
+    },
+    {
+      usedKey: "hitDiceSecondaryUsed",
+      totalKey: "hitDiceSecondaryTotal",
+      remainingKey: "hitDiceSecondaryRemaining",
+      maxKey: "hitDiceSecondaryMax",
+      typeKey: "hitDiceSecondaryType",
+    },
+  ].forEach(({ usedKey, totalKey, remainingKey, maxKey, typeKey }) => {
+    const hasLegacyValues = normalized.character[remainingKey] != null || normalized.character[maxKey] != null;
+    if (hasLegacyValues) {
+      const remaining = clampInteger(normalized.character[remainingKey], 0, 20, 0);
+      const total = Math.max(remaining, clampInteger(normalized.character[maxKey], 1, 20, 1));
+      normalized.character[totalKey] = total;
+      normalized.character[usedKey] = normalized.character[typeKey] === "N/A" ? 0 : total - remaining;
+    } else {
+      const total = clampInteger(normalized.character[totalKey], 1, 20, 1);
+      normalized.character[totalKey] = total;
+      normalized.character[usedKey] = normalized.character[typeKey] === "N/A"
+        ? 0
+        : clampInteger(normalized.character[usedKey], 0, total, 0);
+    }
+    delete normalized.character[remainingKey];
+    delete normalized.character[maxKey];
+  });
   delete normalized.character.hitDice;
   normalized.ui = {
     ...defaultState.ui,
@@ -399,6 +430,24 @@ function normalizeState(nextState) {
     },
   };
   delete normalized.rage.types;
+  normalized.fighter = {
+    ...defaultState.fighter,
+    ...(normalized.fighter || {}),
+  };
+  normalized.fighter.secondWindTotal = clampInteger(normalized.fighter.secondWindTotal, 0, 99, 2);
+  normalized.fighter.secondWindUsed = clampInteger(
+    normalized.fighter.secondWindUsed,
+    0,
+    normalized.fighter.secondWindTotal,
+    0,
+  );
+  normalized.fighter.actionSurgeTotal = clampInteger(normalized.fighter.actionSurgeTotal, 0, 99, 0);
+  normalized.fighter.actionSurgeUsed = clampInteger(
+    normalized.fighter.actionSurgeUsed,
+    0,
+    normalized.fighter.actionSurgeTotal,
+    0,
+  );
   const normalizedStatuses = (normalized.statuses || []).map((status) => ({
     active: false,
     duration: "",
@@ -472,7 +521,9 @@ function normalizeState(nextState) {
 
 function saveState() {
   clampCharacterHp();
+  clampCharacterArmorClass();
   clampCharacterHitDice();
+  clampFighterUses();
   const serializedState = JSON.stringify(state);
   localStorage.setItem(STORAGE_KEY, serializedState);
   maybeCreateVersionedBackup(serializedState);
@@ -503,32 +554,44 @@ function clampCharacterHp() {
   state.character.hp = Math.max(0, Math.min(currentHp, maxHp));
 }
 
+function clampCharacterArmorClass() {
+  state.character.armorClass = clampInteger(state.character.armorClass, 0, 99, 10);
+  state.character.armorClassNotes = String(state.character.armorClassNotes || "");
+}
+
+function syncArmorClassShield() {
+  const shield = $("#acShieldButton");
+  const value = $("#acShieldValue");
+  if (!shield || !value) return;
+  value.textContent = String(state.character.armorClass);
+  shield.setAttribute("aria-label", `Armor Class ${state.character.armorClass}. Edit Armor Class`);
+}
+
 function clampCharacterHitDice() {
-  const hitDiceMax = clampInteger(state.character.hitDiceMax, 1, 20, 1);
-  state.character.hitDiceMax = hitDiceMax;
-  state.character.hitDiceRemaining = clampInteger(state.character.hitDiceRemaining, 0, hitDiceMax, 0);
-  const hitDiceSecondaryMax = clampInteger(state.character.hitDiceSecondaryMax, 1, 20, 1);
-  state.character.hitDiceSecondaryMax = hitDiceSecondaryMax;
-  state.character.hitDiceSecondaryRemaining = clampInteger(
-    state.character.hitDiceSecondaryRemaining,
-    0,
-    hitDiceSecondaryMax,
-    0,
-  );
+  [
+    ["hitDiceUsed", "hitDiceTotal", "hitDiceType"],
+    ["hitDiceSecondaryUsed", "hitDiceSecondaryTotal", "hitDiceSecondaryType"],
+  ].forEach(([usedKey, totalKey, typeKey]) => {
+    const total = clampInteger(state.character[totalKey], 1, 20, 1);
+    state.character[totalKey] = total;
+    state.character[usedKey] = state.character[typeKey] === "N/A"
+      ? 0
+      : clampInteger(state.character[usedKey], 0, total, 0);
+  });
 }
 
 function syncCharacterHitDiceInputs() {
   [
-    ["character.hitDiceRemaining", "character.hitDiceMax"],
-    ["character.hitDiceSecondaryRemaining", "character.hitDiceSecondaryMax"],
-  ].forEach(([currentPath, maxPath]) => {
-    const currentInput = $(`[data-path='${currentPath}']`);
-    const maxInput = $(`[data-path='${maxPath}']`);
-    if (currentInput) {
-      currentInput.max = String(getByPath(maxPath));
-      syncPathInput(currentInput);
+    ["character.hitDiceUsed", "character.hitDiceTotal"],
+    ["character.hitDiceSecondaryUsed", "character.hitDiceSecondaryTotal"],
+  ].forEach(([usedPath, totalPath]) => {
+    const usedInput = $(`[data-path='${usedPath}']`);
+    const totalInput = $(`[data-path='${totalPath}']`);
+    if (usedInput) {
+      usedInput.max = String(getByPath(totalPath));
+      syncPathInput(usedInput);
     }
-    if (maxInput) syncPathInput(maxInput);
+    if (totalInput) syncPathInput(totalInput);
   });
 }
 
@@ -543,6 +606,32 @@ function syncRageInputs() {
   ["rage.total", "rage.used"].forEach((path) => {
     const input = $(`[data-path='${path}']`);
     if (input) syncPathInput(input);
+  });
+}
+
+function clampFighterUses() {
+  [
+    ["secondWindUsed", "secondWindTotal"],
+    ["actionSurgeUsed", "actionSurgeTotal"],
+  ].forEach(([usedKey, totalKey]) => {
+    const total = clampInteger(state.fighter[totalKey], 0, 99, 0);
+    state.fighter[totalKey] = total;
+    state.fighter[usedKey] = clampInteger(state.fighter[usedKey], 0, total, 0);
+  });
+}
+
+function syncFighterInputs() {
+  [
+    ["fighter.secondWindUsed", "fighter.secondWindTotal"],
+    ["fighter.actionSurgeUsed", "fighter.actionSurgeTotal"],
+  ].forEach(([usedPath, totalPath]) => {
+    const usedInput = $(`[data-path='${usedPath}']`);
+    const totalInput = $(`[data-path='${totalPath}']`);
+    if (usedInput) {
+      usedInput.max = String(getByPath(totalPath));
+      syncPathInput(usedInput);
+    }
+    if (totalInput) syncPathInput(totalInput);
   });
 }
 
@@ -582,11 +671,83 @@ function finishCharacterNameEdit({ save = true } = {}) {
   syncCharacterNameTitle();
 }
 
+function openArmorClassDialog() {
+  const dialog = $("#acDialog");
+  const valueInput = $("#acValueInput");
+  const notesInput = $("#acNotesInput");
+  valueInput.value = state.character.armorClass;
+  notesInput.value = state.character.armorClassNotes;
+  dialog.showModal();
+  valueInput.focus();
+  valueInput.select();
+}
+
+function closeArmorClassDialog() {
+  $("#acDialog").close();
+}
+
+function saveArmorClass(event) {
+  event.preventDefault();
+  state.character.armorClass = clampInteger($("#acValueInput").value, 0, 99, 10);
+  state.character.armorClassNotes = $("#acNotesInput").value;
+  saveState();
+  syncArmorClassShield();
+  closeArmorClassDialog();
+}
+
 function adjustCharacterHp(amount) {
   const currentHp = Number(state.character.hp || 0);
   state.character.hp = currentHp + amount;
   saveState();
   syncCharacterHpInputs();
+}
+
+function takeShortRest() {
+  state.rage.used = Math.max(0, Number(state.rage.used || 0) - 1);
+  state.fighter.secondWindUsed = Math.max(0, Number(state.fighter.secondWindUsed || 0) - 1);
+  saveState();
+  syncRageInputs();
+  syncFighterInputs();
+}
+
+function takeLongRest() {
+  state.character.hp = Math.max(0, Number(state.character.totalHp || 0));
+  state.character.hitDiceUsed = 0;
+  state.character.hitDiceSecondaryUsed = 0;
+  state.rage.used = 0;
+  state.fighter.secondWindUsed = 0;
+  saveState();
+  syncCharacterHpInputs();
+  syncCharacterHitDiceInputs();
+  syncRageInputs();
+  syncFighterInputs();
+  showRestReminder();
+}
+
+function showRestReminder() {
+  const toast = $("#restReminderToast");
+  if (!toast) return;
+  toast.hidden = false;
+  toast.classList.remove("is-visible");
+  void toast.offsetWidth;
+  toast.classList.add("is-visible");
+}
+
+function hideRestReminder() {
+  const toast = $("#restReminderToast");
+  if (!toast) return;
+  toast.classList.remove("is-visible");
+  toast.hidden = true;
+}
+
+function suppressRageTooltip(button) {
+  const wrapper = button.closest(".fighter-button-wrap");
+  if (!wrapper) return;
+  wrapper.classList.add("tooltip-suppressed");
+  button.blur();
+  const restoreTooltip = () => wrapper.classList.remove("tooltip-suppressed");
+  wrapper.addEventListener("pointerleave", restoreTooltip, { once: true });
+  button.addEventListener("focus", restoreTooltip, { once: true });
 }
 
 function getAbilityModifier(score) {
@@ -627,16 +788,21 @@ function bindPathInputs() {
       if (input.dataset.path.startsWith("character.hitDice")) {
         syncCharacterHitDiceInputs();
       }
+      if (input.dataset.path.startsWith("fighter.")) {
+        syncFighterInputs();
+      }
     };
     input.addEventListener("input", syncState);
     input.addEventListener("change", syncState);
   });
   syncCharacterHitDiceInputs();
+  syncFighterInputs();
 }
 
 function syncPathInputs() {
   $$("[data-path]").forEach(syncPathInput);
   syncCharacterHitDiceInputs();
+  syncFighterInputs();
 }
 
 function syncPathInput(input) {
@@ -805,8 +971,10 @@ function getGlobalSearchResults() {
       ["Current HP", state.character.hp],
       ["Temporary HP", state.character.tempHp],
       ["Total HP", state.character.totalHp],
-      ["Hit Dice", `${state.character.hitDiceRemaining}/${state.character.hitDiceMax} ${state.character.hitDiceType}`],
-      ["Hit Dice 2", `${state.character.hitDiceSecondaryRemaining}/${state.character.hitDiceSecondaryMax} ${state.character.hitDiceSecondaryType}`],
+      ["Armor Class", state.character.armorClass],
+      ["AC Notes", state.character.armorClassNotes],
+      ["Hit Dice", `${state.character.hitDiceUsed}/${state.character.hitDiceTotal} used ${state.character.hitDiceType}`],
+      ["Hit Dice 2", `${state.character.hitDiceSecondaryUsed}/${state.character.hitDiceSecondaryTotal} used ${state.character.hitDiceSecondaryType}`],
       ["Proficiency Bonus", state.character.proficiencyBonus],
     ],
     view: "sheet",
@@ -854,6 +1022,17 @@ function getGlobalSearchResults() {
     ],
     view: "combat",
     kind: "rage",
+  });
+
+  addResult({
+    section: "Fighter",
+    title: "Fighter Features",
+    fields: [
+      ["Second Wind", `${state.fighter.secondWindUsed}/${state.fighter.secondWindTotal} used`],
+      ["Action Surge", `${state.fighter.actionSurgeUsed}/${state.fighter.actionSurgeTotal} used`],
+    ],
+    view: "combat",
+    kind: "fighter",
   });
 
   EXPERIMENT_RAGES.forEach((serum) => {
@@ -981,6 +1160,8 @@ function openGlobalSearchResult(result) {
       : `[data-skill-group="${result.key}"]`;
   } else if (result.kind === "rage") {
     selector = ".rage-panel";
+  } else if (result.kind === "fighter") {
+    selector = ".fighter-panel";
   } else if (result.kind === "serum") {
     state.rage.serumExpanded[result.key] = true;
     saveState();
@@ -1346,10 +1527,7 @@ function renderRageTypes() {
     const name = document.createElement("h3");
     name.className = "action-name";
     name.textContent = serum.name;
-    const summary = document.createElement("div");
-    summary.className = "action-summary";
-    summary.textContent = isActive ? "Active serum" : serum.summary;
-    title.append(name, summary);
+    title.append(name);
 
     const controls = document.createElement("div");
     controls.className = "action-controls rage-serum-controls";
@@ -1375,10 +1553,16 @@ function renderRageTypes() {
     controls.append(selectButton, expandButton);
     header.append(title, controls);
 
-    const details = document.createElement("p");
+    const details = document.createElement("div");
     details.className = "rage-serum-details";
     details.hidden = !expanded;
-    details.textContent = serum.details;
+    const expandedSummary = document.createElement("p");
+    expandedSummary.className = "rage-serum-expanded-summary";
+    expandedSummary.textContent = serum.summary;
+    const description = document.createElement("p");
+    description.className = "rage-serum-description";
+    description.textContent = serum.details;
+    details.append(expandedSummary, description);
 
     card.append(header, details);
     list.append(card);
@@ -1606,6 +1790,40 @@ function enterRageWithSerum(serumKey) {
   saveState();
   syncRageInputs();
   renderDynamicSections();
+}
+
+function triggerFeatureFlash(type) {
+  const overlay = $("#featureFlashOverlay");
+  if (!overlay) return;
+  window.clearTimeout(featureFlashTimer);
+  overlay.classList.remove("flash-second-wind", "flash-action-surge");
+  void overlay.offsetWidth;
+  overlay.classList.add(`flash-${type}`);
+  featureFlashTimer = window.setTimeout(() => {
+    overlay.classList.remove("flash-second-wind", "flash-action-surge");
+  }, 1000);
+}
+
+function useFighterFeature(feature) {
+  const featureState = {
+    secondWind: {
+      usedKey: "secondWindUsed",
+      totalKey: "secondWindTotal",
+      flash: "second-wind",
+    },
+    actionSurge: {
+      usedKey: "actionSurgeUsed",
+      totalKey: "actionSurgeTotal",
+      flash: "action-surge",
+    },
+  }[feature];
+  if (!featureState) return;
+  const remaining = state.fighter[featureState.totalKey] - state.fighter[featureState.usedKey];
+  if (remaining <= 0) return;
+  state.fighter[featureState.usedKey] += 1;
+  saveState();
+  syncFighterInputs();
+  triggerFeatureFlash(featureState.flash);
 }
 
 function renderInventory() {
@@ -2355,12 +2573,25 @@ function updateComputedValues() {
   document.body.classList.toggle("raging", Boolean(state.rage.inRage));
   syncRageTheme();
   syncCharacterNameTitle();
+  syncArmorClassShield();
   updateRageButton(remaining);
+  updateFighterButtons();
   updateRageTitles();
   const hpInput = $(".hp-main-input");
   if (hpInput) {
     hpInput.style.setProperty("--hp-danger", hpDanger.toFixed(3));
   }
+}
+
+function updateFighterButtons() {
+  [
+    ["#secondWindButton", "secondWindUsed", "secondWindTotal"],
+    ["#actionSurgeButton", "actionSurgeUsed", "actionSurgeTotal"],
+  ].forEach(([selector, usedKey, totalKey]) => {
+    const button = $(selector);
+    if (!button) return;
+    button.disabled = state.fighter[totalKey] - state.fighter[usedKey] <= 0;
+  });
 }
 
 function syncRageTheme() {
@@ -2451,15 +2682,27 @@ function addEventHandlers() {
     }
   });
 
+  $("#acShieldButton").addEventListener("click", openArmorClassDialog);
+  $("#acDialogForm").addEventListener("submit", saveArmorClass);
+  $("#closeAcDialog").addEventListener("click", closeArmorClassDialog);
+  $("#cancelAcDialog").addEventListener("click", closeArmorClassDialog);
+
   $("#proficiencyBonus").addEventListener("input", (event) => {
     state.character.proficiencyBonus = Number(event.target.value || 0);
     saveState();
     renderSkills();
   });
 
-  $("#rageToggleButton").addEventListener("click", () => {
+  $("#rageToggleButton").addEventListener("click", (event) => {
     toggleRageState();
+    suppressRageTooltip(event.currentTarget);
   });
+
+  $("#secondWindButton").addEventListener("click", () => useFighterFeature("secondWind"));
+  $("#actionSurgeButton").addEventListener("click", () => useFighterFeature("actionSurge"));
+  $("#shortRestButton").addEventListener("click", takeShortRest);
+  $("#longRestButton").addEventListener("click", takeLongRest);
+  $("#closeRestReminder").addEventListener("click", hideRestReminder);
 
   $("#addAction").addEventListener("click", () => {
     state.actions.push({ name: "", description: "", toHit: "", damage: "", expanded: true });
@@ -2596,16 +2839,61 @@ function addEventHandlers() {
   $("#resetData").addEventListener("click", resetData);
 }
 
-function exportData() {
-  storeVersionedBackup("export");
-  const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+function downloadExport(json, filename) {
+  const blob = new Blob([json], { type: "application/json" });
   const link = document.createElement("a");
-  const characterName = state.character.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || "barbarian";
-  const timestamp = formatCompactTimestamp();
   link.href = URL.createObjectURL(blob);
-  link.download = `${characterName}-sheet-${timestamp}.json`;
+  link.download = filename;
   link.click();
   URL.revokeObjectURL(link.href);
+}
+
+async function exportData() {
+  storeVersionedBackup("export");
+  const characterName = state.character.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || "barbarian";
+  const timestamp = formatCompactTimestamp();
+  const filename = `${characterName}-sheet-${timestamp}.json`;
+  const json = JSON.stringify(state, null, 2);
+
+  if (!("showDirectoryPicker" in window)) {
+    alert("This browser cannot write directly to the Saves folder. The export will use your Downloads folder instead.");
+    downloadExport(json, filename);
+    return;
+  }
+
+  try {
+    const selectedDirectory = await window.showDirectoryPicker({
+      id: "odyn-character-saves",
+      mode: "readwrite",
+      startIn: "documents",
+    });
+    let savesDirectory = selectedDirectory;
+    if (selectedDirectory.name.toLowerCase() !== "saves") {
+      try {
+        savesDirectory = await selectedDirectory.getDirectoryHandle("Saves");
+      } catch (error) {
+        if (error.name === "NotFoundError") {
+          alert("Choose either the Odyn Webapp folder or its Saves folder.");
+          return;
+        }
+        throw error;
+      }
+    }
+    const fileHandle = await savesDirectory.getFileHandle(filename, { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(json);
+    await writable.close();
+
+    const exportButton = $("#exportData");
+    exportButton.textContent = "Saved";
+    window.setTimeout(() => {
+      exportButton.textContent = "Export to Saves";
+    }, 1600);
+  } catch (error) {
+    if (error.name === "AbortError") return;
+    console.error("Could not export to Saves", error);
+    alert("The export could not be written to the Saves folder.");
+  }
 }
 
 function importData(event) {
