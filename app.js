@@ -1,4 +1,7 @@
 const STORAGE_KEY = "experiment-barbarian-sheet-v1";
+const BACKUP_STORAGE_KEY = `${STORAGE_KEY}-backups`;
+const MAX_BACKUPS = 12;
+const AUTO_BACKUP_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_CHARACTER_TITLE = "Experiment Barbarian";
 const ABILITY_LABELS = {
   STR: "Strength",
@@ -68,7 +71,11 @@ const defaultState = {
     tempHp: 0,
     totalHp: 0,
     hitDiceRemaining: 1,
+    hitDiceMax: 1,
     hitDiceType: "d12",
+    hitDiceSecondaryRemaining: 0,
+    hitDiceSecondaryMax: 1,
+    hitDiceSecondaryType: "N/A",
   },
   rage: {
     total: 2,
@@ -147,6 +154,7 @@ const defaultState = {
 let state = loadState();
 let activeNoteTab = "locations";
 let activeView = "sheet";
+let activeCharacterTab = "character";
 let showInactiveStatuses = false;
 let noteSearchQuery = "";
 let activeNoteFilter = null;
@@ -154,6 +162,10 @@ let inventorySearchQuery = "";
 let activeInventoryFilter = null;
 let showHiddenInventory = false;
 let showHiddenNotes = false;
+let globalSearchQuery = "";
+let pendingUndoAction = null;
+let lastAutoBackupAt = 0;
+let lastBackupSignature = JSON.stringify(state);
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
@@ -181,6 +193,150 @@ function mergeDefaults(saved, defaults) {
   return saved ?? defaults;
 }
 
+function formatCompactTimestamp(date = new Date()) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${String(date.getFullYear()).slice(-2)}${pad(date.getMonth() + 1)}${pad(date.getDate())}_${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+}
+
+function formatBackupTimestamp(timestamp) {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return "Unknown time";
+  return date.toLocaleString();
+}
+
+function formatBackupReason(reason) {
+  return {
+    autosave: "Autosave",
+    export: "Export",
+    import: "Import",
+    reset: "Reset",
+    restore: "Restore",
+    "pre-import": "Before Import",
+    "pre-reset": "Before Reset",
+    "pre-restore": "Before Restore",
+  }[reason] || "Backup";
+}
+
+function loadBackups() {
+  try {
+    const backups = JSON.parse(localStorage.getItem(BACKUP_STORAGE_KEY) || "[]");
+    return Array.isArray(backups) ? backups : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveBackups(backups) {
+  localStorage.setItem(BACKUP_STORAGE_KEY, JSON.stringify(backups.slice(0, MAX_BACKUPS)));
+  syncBackupButton();
+}
+
+function storeVersionedBackup(reason, snapshot = state) {
+  const snapshotObject = typeof snapshot === "string" ? JSON.parse(snapshot) : clone(snapshot);
+  const backupState = normalizeState(mergeDefaults(snapshotObject, defaultState));
+  const serialized = JSON.stringify(backupState);
+  const backups = loadBackups();
+  backups.unshift({
+    reason,
+    timestamp: new Date().toISOString(),
+    state: backupState,
+  });
+  saveBackups(backups);
+  lastAutoBackupAt = Date.now();
+  lastBackupSignature = serialized;
+}
+
+function maybeCreateVersionedBackup(serializedState) {
+  const now = Date.now();
+  if (serializedState === lastBackupSignature) return;
+  if (now - lastAutoBackupAt < AUTO_BACKUP_INTERVAL_MS) return;
+  storeVersionedBackup("autosave", serializedState);
+}
+
+function syncBackupButton() {
+  const button = $("#restoreBackup");
+  if (!button) return;
+  const backupCount = loadBackups().length;
+  button.disabled = backupCount === 0;
+  button.textContent = backupCount ? `Restore Backup (${backupCount})` : "Restore Backup";
+}
+
+function syncUndoButton() {
+  const button = $("#undoDelete");
+  if (!button) return;
+  button.hidden = !pendingUndoAction;
+  button.textContent = pendingUndoAction ? `Undo ${pendingUndoAction.label}` : "Undo Delete";
+}
+
+function queueUndoAction(action) {
+  pendingUndoAction = action;
+  syncUndoButton();
+}
+
+function clearSearchInputs() {
+  globalSearchQuery = "";
+  const globalSearchInput = $("#globalSearchInput");
+  if (globalSearchInput) globalSearchInput.value = "";
+  closeGlobalSearch();
+  const noteSearchInput = $("#noteSearchInput");
+  if (noteSearchInput) noteSearchInput.value = "";
+  const inventorySearchInput = $("#inventorySearchInput");
+  if (inventorySearchInput) inventorySearchInput.value = "";
+}
+
+function applyLoadedState(nextState) {
+  state = normalizeState(mergeDefaults(clone(nextState), defaultState));
+  activeNoteFilter = null;
+  noteSearchQuery = "";
+  activeInventoryFilter = null;
+  inventorySearchQuery = "";
+  showHiddenInventory = false;
+  showHiddenNotes = false;
+  pendingUndoAction = null;
+  saveState();
+  syncPathInputs();
+  clearSearchInputs();
+  renderDynamicSections();
+}
+
+function undoLastDelete() {
+  if (!pendingUndoAction) return;
+  const action = pendingUndoAction;
+  pendingUndoAction = null;
+  action.restore();
+  saveState();
+  syncPathInputs();
+  renderDynamicSections();
+}
+
+function restoreBackup() {
+  const backups = loadBackups();
+  if (!backups.length) {
+    alert("No backups are available yet.");
+    return;
+  }
+  const shownBackups = backups.slice(0, 8);
+  const promptMessage = shownBackups
+    .map((backup, index) => `${index + 1}. ${formatBackupReason(backup.reason)} - ${formatBackupTimestamp(backup.timestamp)}`)
+    .join("\n");
+  const answer = prompt(`Restore which backup?
+
+${promptMessage}
+
+Enter a number from 1 to ${shownBackups.length}.`);
+  if (answer == null) return;
+  const selectedIndex = Number(answer) - 1;
+  if (!Number.isInteger(selectedIndex) || selectedIndex < 0 || selectedIndex >= shownBackups.length) {
+    alert("Please enter a valid backup number.");
+    return;
+  }
+  const selectedBackup = shownBackups[selectedIndex];
+  if (!confirm(`Restore ${formatBackupReason(selectedBackup.reason)} from ${formatBackupTimestamp(selectedBackup.timestamp)}?`)) return;
+  storeVersionedBackup("pre-restore");
+  applyLoadedState(selectedBackup.state);
+  storeVersionedBackup("restore");
+}
+
 function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -202,6 +358,20 @@ function normalizeState(nextState) {
   }
   if (normalized.character.hitDiceRemaining == null) normalized.character.hitDiceRemaining = defaultState.character.hitDiceRemaining;
   if (normalized.character.hitDiceType == null) normalized.character.hitDiceType = defaultState.character.hitDiceType;
+  const hitDiceRemaining = clampInteger(normalized.character.hitDiceRemaining, 0, 20, 0);
+  const hitDiceMax = clampInteger(normalized.character.hitDiceMax, 1, 20, 1);
+  normalized.character.hitDiceMax = Math.max(hitDiceRemaining, hitDiceMax);
+  normalized.character.hitDiceRemaining = Math.min(hitDiceRemaining, normalized.character.hitDiceMax);
+  const hitDiceSecondaryRemaining = clampInteger(normalized.character.hitDiceSecondaryRemaining, 0, 20, 0);
+  const hitDiceSecondaryMax = clampInteger(normalized.character.hitDiceSecondaryMax, 1, 20, 1);
+  normalized.character.hitDiceSecondaryMax = Math.max(hitDiceSecondaryRemaining, hitDiceSecondaryMax);
+  normalized.character.hitDiceSecondaryRemaining = Math.min(
+    hitDiceSecondaryRemaining,
+    normalized.character.hitDiceSecondaryMax,
+  );
+  if (normalized.character.hitDiceSecondaryType == null) {
+    normalized.character.hitDiceSecondaryType = defaultState.character.hitDiceSecondaryType;
+  }
   delete normalized.character.hitDice;
   normalized.ui = {
     ...defaultState.ui,
@@ -251,11 +421,6 @@ function normalizeState(nextState) {
     chargesUsed: 0,
     ...ability,
   }));
-  const existingStatusNames = new Set(normalizedStatuses.map((status) => status.name.trim().toLowerCase()));
-  defaultState.statuses.forEach((status) => {
-    const key = status.name.trim().toLowerCase();
-    if (!existingStatusNames.has(key)) normalizedStatuses.push(clone(status));
-  });
   const savedSkills = Array.isArray(normalized.skills) ? normalized.skills : [];
   const savedSkillsByName = new Map(savedSkills.map((skill) => [skill.name?.trim().toLowerCase(), skill]));
   normalized.skills = SKILL_DEFINITIONS.map((skill) => ({
@@ -307,7 +472,10 @@ function normalizeState(nextState) {
 
 function saveState() {
   clampCharacterHp();
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  clampCharacterHitDice();
+  const serializedState = JSON.stringify(state);
+  localStorage.setItem(STORAGE_KEY, serializedState);
+  maybeCreateVersionedBackup(serializedState);
   updateComputedValues();
 }
 
@@ -322,11 +490,46 @@ function setByPath(path, value) {
   target[last] = value;
 }
 
+function clampInteger(value, min, max, fallback = min) {
+  const number = Number(value);
+  const normalized = Number.isFinite(number) ? Math.trunc(number) : fallback;
+  return Math.max(min, Math.min(max, normalized));
+}
+
 function clampCharacterHp() {
   const currentHp = Number(state.character.hp || 0);
   const totalHp = Number(state.character.totalHp || 0);
   const maxHp = totalHp > 0 ? totalHp : Infinity;
   state.character.hp = Math.max(0, Math.min(currentHp, maxHp));
+}
+
+function clampCharacterHitDice() {
+  const hitDiceMax = clampInteger(state.character.hitDiceMax, 1, 20, 1);
+  state.character.hitDiceMax = hitDiceMax;
+  state.character.hitDiceRemaining = clampInteger(state.character.hitDiceRemaining, 0, hitDiceMax, 0);
+  const hitDiceSecondaryMax = clampInteger(state.character.hitDiceSecondaryMax, 1, 20, 1);
+  state.character.hitDiceSecondaryMax = hitDiceSecondaryMax;
+  state.character.hitDiceSecondaryRemaining = clampInteger(
+    state.character.hitDiceSecondaryRemaining,
+    0,
+    hitDiceSecondaryMax,
+    0,
+  );
+}
+
+function syncCharacterHitDiceInputs() {
+  [
+    ["character.hitDiceRemaining", "character.hitDiceMax"],
+    ["character.hitDiceSecondaryRemaining", "character.hitDiceSecondaryMax"],
+  ].forEach(([currentPath, maxPath]) => {
+    const currentInput = $(`[data-path='${currentPath}']`);
+    const maxInput = $(`[data-path='${maxPath}']`);
+    if (currentInput) {
+      currentInput.max = String(getByPath(maxPath));
+      syncPathInput(currentInput);
+    }
+    if (maxInput) syncPathInput(maxInput);
+  });
 }
 
 function syncCharacterHpInputs() {
@@ -421,14 +624,19 @@ function bindPathInputs() {
       ) {
         syncCharacterHpInputs();
       }
+      if (input.dataset.path.startsWith("character.hitDice")) {
+        syncCharacterHitDiceInputs();
+      }
     };
     input.addEventListener("input", syncState);
     input.addEventListener("change", syncState);
   });
+  syncCharacterHitDiceInputs();
 }
 
 function syncPathInputs() {
   $$("[data-path]").forEach(syncPathInput);
+  syncCharacterHitDiceInputs();
 }
 
 function syncPathInput(input) {
@@ -473,13 +681,17 @@ function labeled(label, control) {
   return wrapper;
 }
 
-function removeButton(onClick) {
+function removeButton(onClick, getUndoAction = null) {
   const button = document.createElement("button");
   button.className = "icon-button";
   button.type = "button";
   button.title = "Remove";
   button.textContent = "X";
   button.addEventListener("click", () => {
+    if (getUndoAction) {
+      const undoAction = getUndoAction();
+      if (undoAction) queueUndoAction(undoAction);
+    }
     onClick();
     saveState();
     renderDynamicSections();
@@ -557,6 +769,327 @@ function makeDropTarget(card, index, onMove) {
   });
 }
 
+function getGlobalSearchResults() {
+  const query = globalSearchQuery.trim().toLowerCase();
+  if (!query) return [];
+  const results = [];
+  const addResult = ({ section, title, fields, view, kind, index = null, category = null, key = null }) => {
+    const normalizedFields = fields.map(([label, value]) => [label, String(value ?? "")]);
+    let match = normalizedFields.find(([label, value]) => `${label} ${value}`.toLowerCase().includes(query));
+    if (!match && section.toLowerCase().includes(query)) match = ["Section", section];
+    if (!match) return;
+    const [matchLabel, matchValue] = match;
+    const compactValue = matchValue.replace(/\s+/g, " ").trim();
+    const detail = compactValue && compactValue.toLowerCase() !== title.toLowerCase()
+      ? `${matchLabel}: ${compactValue}`
+      : `Matched ${matchLabel.toLowerCase()}`;
+    results.push({
+      section,
+      title,
+      detail: `${detail.slice(0, 150)}${detail.length > 150 ? "..." : ""}`,
+      view,
+      kind,
+      index,
+      category,
+      key,
+    });
+  };
+
+  addResult({
+    section: "Character",
+    title: state.character.name?.trim() || DEFAULT_CHARACTER_TITLE,
+    fields: [
+      ["Name", state.character.name],
+      ["Level", state.character.level],
+      ["Speed", state.character.speed],
+      ["Current HP", state.character.hp],
+      ["Temporary HP", state.character.tempHp],
+      ["Total HP", state.character.totalHp],
+      ["Hit Dice", `${state.character.hitDiceRemaining}/${state.character.hitDiceMax} ${state.character.hitDiceType}`],
+      ["Hit Dice 2", `${state.character.hitDiceSecondaryRemaining}/${state.character.hitDiceSecondaryMax} ${state.character.hitDiceSecondaryType}`],
+      ["Proficiency Bonus", state.character.proficiencyBonus],
+    ],
+    view: "sheet",
+    kind: "character",
+  });
+
+  state.stats.forEach((stat) => {
+    addResult({
+      section: "Stats & Skills",
+      title: ABILITY_LABELS[stat.name] || stat.name,
+      fields: [
+        ["Ability", `${stat.name} ${ABILITY_LABELS[stat.name] || ""}`],
+        ["Score", stat.value],
+        ["Saving Throw", getSavingThrowTotal(stat)],
+      ],
+      view: "sheet",
+      kind: "stat",
+      key: stat.name,
+    });
+  });
+
+  state.skills.forEach((skill) => {
+    addResult({
+      section: "Stats & Skills",
+      title: skill.name,
+      fields: [
+        ["Skill", skill.name],
+        ["Ability", `${skill.ability} ${ABILITY_LABELS[skill.ability] || ""}`],
+        ["Modifier", skill.modifier],
+        ["Proficient", skill.proficient ? "Yes" : "No"],
+      ],
+      view: "sheet",
+      kind: "skill",
+      key: skill.ability,
+    });
+  });
+
+  addResult({
+    section: "Rage",
+    title: "Rage Tracker",
+    fields: [
+      ["Rages Total", state.rage.total],
+      ["Rages Used", state.rage.used],
+      ["Rage Status", state.rage.inRage ? "Raging" : "Not raging"],
+    ],
+    view: "combat",
+    kind: "rage",
+  });
+
+  EXPERIMENT_RAGES.forEach((serum) => {
+    addResult({
+      section: "Rage",
+      title: serum.name,
+      fields: [["Serum", serum.name], ["Summary", serum.summary], ["Details", serum.details]],
+      view: "combat",
+      kind: "serum",
+      key: serum.key,
+    });
+  });
+
+  state.actions.forEach((action, index) => {
+    addResult({
+      section: "Actions & Attacks",
+      title: action.name?.trim() || "New Action",
+      fields: [["Name", action.name], ["To Hit", action.toHit], ["Damage", action.damage], ["Description", action.description]],
+      view: "combat",
+      kind: "action",
+      index,
+    });
+  });
+
+  state.abilities.forEach((ability, index) => {
+    addResult({
+      section: "Abilities",
+      title: ability.name?.trim() || "New Ability",
+      fields: [["Name", ability.name], ["Description", ability.description]],
+      view: "sheet",
+      kind: "ability",
+      index,
+    });
+  });
+
+  state.inventory.forEach((item, index) => {
+    addResult({
+      section: "Inventory",
+      title: item.name?.trim() || "Unnamed Item",
+      fields: [["Name", item.name], ["Quantity", item.quantity], ["Description", item.notes]],
+      view: "sheet",
+      kind: "inventory",
+      index,
+    });
+  });
+
+  state.statuses.forEach((status, index) => {
+    addResult({
+      section: "Statuses",
+      title: status.name?.trim() || "Unnamed Status",
+      fields: [["Name", status.name], ["Duration", status.duration], ["Notes", status.notes], ["State", status.active ? "Active" : "Inactive"]],
+      view: "sheet",
+      kind: "status",
+      index,
+    });
+  });
+
+  addResult({
+    section: "Notes",
+    title: "Current Session Scratch Pad",
+    fields: [["Scratch Pad", state.notes.sessionScratchPad]],
+    view: "notes",
+    kind: "scratchpad",
+  });
+
+  ["locations", "people", "plot", "backstory"].forEach((category) => {
+    state.notes[category].forEach((note, index) => {
+      const categoryLabel = `${category.charAt(0).toUpperCase()}${category.slice(1)}`;
+      addResult({
+        section: `Notes - ${categoryLabel}`,
+        title: note.title?.trim() || "Untitled Knowledge",
+        fields: [["Title", note.title], ["Knowledge", note.body]],
+        view: "notes",
+        kind: "note",
+        category,
+        index,
+      });
+    });
+  });
+
+  state.notes.sessions.forEach((note, index) => {
+    addResult({
+      section: "Session Notes",
+      title: Number(note.sessionNumber || 0) > 0 ? `Session ${note.sessionNumber}` : "Session Note",
+      fields: [["Session", note.sessionNumber], ["Date", note.date], ["Notes", note.body]],
+      view: "notes",
+      kind: "session",
+      index,
+    });
+  });
+
+  return results;
+}
+
+function closeGlobalSearch() {
+  const input = $("#globalSearchInput");
+  const resultsContainer = $("#globalSearchResults");
+  if (!input || !resultsContainer) return;
+  resultsContainer.hidden = true;
+  input.setAttribute("aria-expanded", "false");
+}
+
+function scrollToGlobalSearchTarget(selector) {
+  requestAnimationFrame(() => {
+    const target = $(selector);
+    if (!target) return;
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    target.classList.remove("search-hit-highlight");
+    requestAnimationFrame(() => target.classList.add("search-hit-highlight"));
+    window.setTimeout(() => target.classList.remove("search-hit-highlight"), 1700);
+  });
+}
+
+function openGlobalSearchResult(result) {
+  setActiveView(result.view);
+  let selector = "";
+  if (result.kind === "character") {
+    selector = ".character-panel";
+  } else if (result.kind === "stat" || result.kind === "skill") {
+    state.ui.collapsedSkillGroups[result.key] = false;
+    saveState();
+    renderSkills();
+    selector = result.kind === "skill"
+      ? `[data-skill-name="${result.title}"]`
+      : `[data-skill-group="${result.key}"]`;
+  } else if (result.kind === "rage") {
+    selector = ".rage-panel";
+  } else if (result.kind === "serum") {
+    state.rage.serumExpanded[result.key] = true;
+    saveState();
+    renderRageTypes();
+    selector = `[data-serum-key="${result.key}"]`;
+  } else if (result.kind === "action") {
+    state.actions[result.index].expanded = true;
+    saveState();
+    renderActions();
+    selector = `[data-action-index="${result.index}"]`;
+  } else if (result.kind === "ability") {
+    state.abilities[result.index].expanded = true;
+    saveState();
+    renderAbilities();
+    selector = `[data-ability-index="${result.index}"]`;
+  } else if (result.kind === "inventory") {
+    activeInventoryFilter = null;
+    if (state.inventory[result.index].hidden) showHiddenInventory = true;
+    state.inventory[result.index].expanded = true;
+    saveState();
+    renderInventory();
+    selector = `[data-inventory-index="${result.index}"]`;
+  } else if (result.kind === "status") {
+    if (!state.statuses[result.index].active) showInactiveStatuses = true;
+    renderStatuses();
+    selector = `[data-status-index="${result.index}"]`;
+  } else if (result.kind === "scratchpad") {
+    selector = ".scratch-pad-card";
+  } else if (result.kind === "note") {
+    activeNoteTab = result.category;
+    activeNoteFilter = null;
+    if (state.notes[result.category][result.index].hidden) showHiddenNotes = true;
+    state.notes[result.category][result.index].expanded = true;
+    saveState();
+    syncNoteTabs();
+    renderNotes();
+    selector = `[data-note-category="${result.category}"][data-note-index="${result.index}"]`;
+  } else if (result.kind === "session") {
+    const sessionNote = state.notes.sessions[result.index];
+    sessionNote.expanded = true;
+    saveState();
+    renderSessionNotes();
+    selector = `[data-session-index="${state.notes.sessions.indexOf(sessionNote)}"]`;
+  }
+  closeGlobalSearch();
+  $("#globalSearchInput")?.blur();
+  if (selector) scrollToGlobalSearchTarget(selector);
+}
+
+function renderGlobalSearchResults() {
+  const input = $("#globalSearchInput");
+  const resultsContainer = $("#globalSearchResults");
+  if (!input || !resultsContainer) return;
+  resultsContainer.innerHTML = "";
+  const hasQuery = Boolean(globalSearchQuery.trim());
+  if (!hasQuery) {
+    closeGlobalSearch();
+    return;
+  }
+  const results = getGlobalSearchResults().slice(0, 30);
+  resultsContainer.hidden = false;
+  input.setAttribute("aria-expanded", "true");
+  if (!results.length) {
+    const empty = document.createElement("div");
+    empty.className = "global-search-empty";
+    empty.textContent = "No matches anywhere on this sheet.";
+    resultsContainer.append(empty);
+    return;
+  }
+  let previousSection = "";
+  results.forEach((result) => {
+    if (result.section !== previousSection) {
+      const group = document.createElement("div");
+      group.className = "global-search-group";
+      group.textContent = result.section;
+      resultsContainer.append(group);
+      previousSection = result.section;
+    }
+    const button = document.createElement("button");
+    button.className = "global-search-result";
+    button.type = "button";
+    const title = document.createElement("span");
+    title.className = "global-search-result-title";
+    title.textContent = result.title;
+    const detail = document.createElement("span");
+    detail.className = "global-search-result-detail";
+    detail.textContent = result.detail;
+    button.append(title, detail);
+    button.addEventListener("click", () => openGlobalSearchResult(result));
+    button.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeGlobalSearch();
+        input.focus();
+        return;
+      }
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      event.preventDefault();
+      const resultButtons = $$(".global-search-result");
+      const currentIndex = resultButtons.indexOf(button);
+      const nextIndex = event.key === "ArrowDown"
+        ? Math.min(resultButtons.length - 1, currentIndex + 1)
+        : Math.max(0, currentIndex - 1);
+      resultButtons[nextIndex]?.focus();
+    });
+    resultsContainer.append(button);
+  });
+}
+
 function renderChargesTracker(target) {
   const wrapper = document.createElement("div");
   wrapper.className = "charges-section";
@@ -629,6 +1162,7 @@ function renderSkills() {
 
     const section = document.createElement("section");
     section.className = "skill-group";
+    section.dataset.skillGroup = ability;
     if (isCollapsed) section.classList.add("is-collapsed");
     if (groupedSkills.length === 1) {
       section.classList.add("skill-group-compact");
@@ -645,7 +1179,18 @@ function renderSkills() {
     title.textContent = ABILITY_LABELS[ability];
     const modifier = document.createElement("span");
     modifier.className = "skill-group-modifier";
-    modifier.textContent = `${ability} ${formatModifier(getAbilityModifier(getStatValue(ability)))}`;
+    const updateAbilitySummary = () => {
+      const abilityModifier = getAbilityModifier(getStatValue(ability));
+      const savingThrow = stat ? getSavingThrowTotal(stat) : abilityModifier;
+      const advantageMarker = ability === "STR" || ability === "DEX" ? "*" : "";
+      modifier.textContent = `${ability} ${formatModifier(abilityModifier)}, SAVE ${formatModifier(savingThrow)}${advantageMarker}`;
+      modifier.title = ability === "DEX"
+        ? "Dexterity saving throws always have advantage"
+        : ability === "STR"
+          ? "Strength saving throws have advantage while raging"
+          : "";
+    };
+    updateAbilitySummary();
     titleWrap.append(title, modifier);
 
     const scoreInput = document.createElement("input");
@@ -655,8 +1200,8 @@ function renderSkills() {
     scoreInput.addEventListener("input", () => {
       if (!stat) return;
       stat.value = Number(scoreInput.value || 0);
-      modifier.textContent = `${ability} ${formatModifier(getAbilityModifier(stat.value))}`;
       saveScore.value = getSavingThrowTotal(stat);
+      updateAbilitySummary();
       skillScoreUpdaters.forEach((updateScore) => updateScore());
       saveState();
     });
@@ -669,6 +1214,7 @@ function renderSkills() {
       if (!stat) return;
       stat.saveProficient = saveProficient.checked;
       saveScore.value = getSavingThrowTotal(stat);
+      updateAbilitySummary();
       saveState();
     });
 
@@ -681,6 +1227,7 @@ function renderSkills() {
       const abilityModifier = getAbilityModifier(stat.value);
       const proficiencyModifier = stat.saveProficient ? Number(state.character.proficiencyBonus || 0) : 0;
       stat.saveModifier = Number(saveScore.value || 0) - abilityModifier - proficiencyModifier;
+      updateAbilitySummary();
       saveState();
     });
 
@@ -713,7 +1260,9 @@ function renderSkills() {
       const saveLabel = document.createElement("span");
       saveLabel.className = "skill-label-with-tag";
       saveLabel.append(saveName);
-      if (state.rage.inRage && ability === "STR") {
+      if (ability === "DEX") {
+        saveLabel.append(advantageTag());
+      } else if (state.rage.inRage && ability === "STR") {
         saveLabel.append(advantageTag());
       } else if (!state.rage.inRage && ability === "STR") {
         saveLabel.append(skillMarker("red"));
@@ -725,6 +1274,7 @@ function renderSkills() {
     if (!isCollapsed) groupedSkills.forEach((skill) => {
       const row = document.createElement("label");
       row.className = "skill-row";
+      row.dataset.skillName = skill.name;
 
       const proficient = document.createElement("input");
       proficient.type = "checkbox";
@@ -786,6 +1336,7 @@ function renderRageTypes() {
     const isActive = state.rage.inRage && state.rage.activeType === serum.key;
     const expanded = Boolean(state.rage.serumExpanded?.[serum.key]);
     card.className = `rage-serum-card${isActive ? " is-active" : ""}`;
+    card.dataset.serumKey = serum.key;
 
     const header = document.createElement("div");
     header.className = "rage-serum-header";
@@ -842,7 +1393,14 @@ function renderActions() {
   state.actions.forEach((action, index) => {
     const card = document.createElement("div");
     card.className = "row-card action-card";
+    card.dataset.actionIndex = String(index);
     card.classList.toggle("is-reckless", Boolean(state.ui.reckless));
+    const handle = dragHandle(index);
+    makeDropTarget(card, index, (fromIndex, toIndex) => {
+      moveArrayItem(state.actions, fromIndex, toIndex);
+      saveState();
+      renderActions();
+    });
 
     const expanded = action.expanded !== false;
     const header = document.createElement("div");
@@ -888,7 +1446,16 @@ function renderActions() {
       toggle.setAttribute("aria-label", toggle.title);
       saveState();
     });
-    controls.append(toggle, removeButton(() => state.actions.splice(index, 1)));
+    controls.append(handle, toggle, removeButton(
+      () => state.actions.splice(index, 1),
+      () => {
+        const deletedAction = clone(action);
+        return {
+          label: "Remove Action",
+          restore: () => state.actions.splice(Math.min(index, state.actions.length), 0, clone(deletedAction)),
+        };
+      },
+    ));
     header.append(title, controls);
 
     details.append(
@@ -923,6 +1490,13 @@ function renderAbilities() {
   state.abilities.forEach((ability, index) => {
     const card = document.createElement("div");
     card.className = "row-card action-card";
+    card.dataset.abilityIndex = String(index);
+    const handle = dragHandle(index);
+    makeDropTarget(card, index, (fromIndex, toIndex) => {
+      moveArrayItem(state.abilities, fromIndex, toIndex);
+      saveState();
+      renderAbilities();
+    });
 
     const expanded = ability.expanded !== false;
     const header = document.createElement("div");
@@ -964,7 +1538,16 @@ function renderAbilities() {
       toggle.setAttribute("aria-label", toggle.title);
       saveState();
     });
-    controls.append(toggle, removeButton(() => state.abilities.splice(index, 1)));
+    controls.append(handle, toggle, removeButton(
+      () => state.abilities.splice(index, 1),
+      () => {
+        const deletedAbility = clone(ability);
+        return {
+          label: "Remove Ability",
+          restore: () => state.abilities.splice(Math.min(index, state.abilities.length), 0, clone(deletedAbility)),
+        };
+      },
+    ));
     header.append(title, controls);
 
     details.append(
@@ -1036,6 +1619,7 @@ function renderInventory() {
   items.forEach(({ item, index }) => {
     const card = document.createElement("div");
     card.className = "row-card inventory-card";
+    card.dataset.inventoryIndex = String(index);
     card.classList.toggle("is-hidden-card", Boolean(item.hidden));
     let handle = null;
     if (!activeInventoryFilter) {
@@ -1099,10 +1683,22 @@ function renderInventory() {
       saveState();
     });
     if (handle) controls.append(handle);
-    controls.append(hideButton, toggle, removeButton(() => {
-      activeInventoryFilter = null;
-      state.inventory.splice(index, 1);
-    }));
+    controls.append(hideButton, toggle, removeButton(
+      () => {
+        activeInventoryFilter = null;
+        state.inventory.splice(index, 1);
+      },
+      () => {
+        const deletedItem = clone(item);
+        return {
+          label: "Remove Item",
+          restore: () => {
+            activeInventoryFilter = null;
+            state.inventory.splice(Math.min(index, state.inventory.length), 0, clone(deletedItem));
+          },
+        };
+      },
+    ));
     header.append(title, controls);
 
     details.append(
@@ -1283,6 +1879,7 @@ function renderStatuses() {
 function renderStatusRow(status, index) {
   const row = document.createElement("div");
   row.className = `status-row ${status.active ? "is-active" : "is-inactive"}`;
+  row.dataset.statusIndex = String(index);
 
   const topLine = document.createElement("div");
   topLine.className = "status-row-top";
@@ -1302,16 +1899,30 @@ function renderStatusRow(status, index) {
   }, "Poisoned, frightened, blessed");
   toggle.append(checkbox, statusName);
 
-  topLine.append(toggle, removeButton(() => state.statuses.splice(index, 1)));
+  const duration = textInput(status.duration, (value) => {
+    status.duration = value;
+  }, "1min");
+  duration.className = "status-duration";
+  duration.size = 4;
+  duration.setAttribute("aria-label", "Duration");
+  duration.title = "Duration";
+
+  topLine.append(toggle, duration, removeButton(
+    () => state.statuses.splice(index, 1),
+    () => {
+      const deletedStatus = clone(status);
+      return {
+        label: "Remove Status",
+        restore: () => state.statuses.splice(Math.min(index, state.statuses.length), 0, clone(deletedStatus)),
+      };
+    },
+  ));
 
   const details = document.createElement("div");
   details.className = "status-details";
   details.hidden = !status.active && !showInactiveStatuses;
   details.append(
-    labeled("Duration", textInput(status.duration, (value) => {
-      status.duration = value;
-    }, "1 min")),
-    labeled("Notes", textInput(status.notes, (value) => {
+    labeled("Notes", textArea(status.notes, (value) => {
       status.notes = value;
     }, "Save DC, source, reminder")),
   );
@@ -1340,6 +1951,8 @@ function renderNotes() {
   notes.forEach(({ note, index }) => {
     const card = document.createElement("div");
     card.className = "note-card";
+    card.dataset.noteCategory = activeNoteTab;
+    card.dataset.noteIndex = String(index);
     card.classList.toggle("is-hidden-card", Boolean(note.hidden));
     let handle = null;
     if (!activeNoteFilter) {
@@ -1398,7 +2011,21 @@ function renderNotes() {
       renderNoteSearchResults();
     });
     if (handle) controls.append(handle);
-    controls.append(hideButton, removeButton(() => state.notes[activeNoteTab].splice(index, 1)));
+    controls.append(hideButton, removeButton(
+      () => state.notes[activeNoteTab].splice(index, 1),
+      () => {
+        const category = activeNoteTab;
+        const deletedNote = clone(note);
+        return {
+          label: "Remove Note",
+          restore: () => {
+            activeNoteTab = category;
+            activeNoteFilter = null;
+            state.notes[category].splice(Math.min(index, state.notes[category].length), 0, clone(deletedNote));
+          },
+        };
+      },
+    ));
 
     const details = document.createElement("div");
     details.className = "note-details";
@@ -1443,6 +2070,7 @@ function renderSessionNotes() {
   state.notes.sessions.forEach((sessionNote, index) => {
     const card = document.createElement("div");
     card.className = "row-card session-note-card";
+    card.dataset.sessionIndex = String(index);
 
     const expanded = sessionNote.expanded !== false;
     const header = document.createElement("div");
@@ -1478,7 +2106,16 @@ function renderSessionNotes() {
 
     const controls = document.createElement("div");
     controls.className = "action-controls";
-    controls.append(removeButton(() => state.notes.sessions.splice(index, 1)));
+    controls.append(removeButton(
+      () => state.notes.sessions.splice(index, 1),
+      () => {
+        const deletedSession = clone(sessionNote);
+        return {
+          label: "Remove Session",
+          restore: () => state.notes.sessions.splice(Math.min(index, state.notes.sessions.length), 0, clone(deletedSession)),
+        };
+      },
+    ));
 
     const details = document.createElement("div");
     details.className = "session-note-details";
@@ -1664,6 +2301,18 @@ function syncNoteTabs() {
   $$(".tab-button").forEach((tab) => tab.classList.toggle("active", tab.dataset.noteTab === activeNoteTab));
 }
 
+function setActiveCharacterTab(nextTab) {
+  activeCharacterTab = nextTab;
+  $$("[data-character-tab]").forEach((button) => {
+    const isActive = button.dataset.characterTab === nextTab;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-selected", String(isActive));
+  });
+  $$("[data-character-tab-panel]").forEach((panel) => {
+    panel.hidden = panel.dataset.characterTabPanel !== nextTab;
+  });
+}
+
 function sortNotesAlphabetically() {
   activeNoteFilter = null;
   state.notes[activeNoteTab].sort((a, b) => getSortTitle(a.title, "Untitled Knowledge").localeCompare(getSortTitle(b.title, "Untitled Knowledge")));
@@ -1691,6 +2340,8 @@ function renderDynamicSections() {
   renderNotes();
   renderSessionNotes();
   renderNoteSearchResults();
+  syncUndoButton();
+  syncBackupButton();
   updateComputedValues();
   syncViewPanels();
 }
@@ -1762,6 +2413,31 @@ function setActiveView(nextView) {
 }
 
 function addEventHandlers() {
+  const globalSearchInput = $("#globalSearchInput");
+  globalSearchInput.addEventListener("input", () => {
+    globalSearchQuery = globalSearchInput.value;
+    renderGlobalSearchResults();
+  });
+  globalSearchInput.addEventListener("focus", renderGlobalSearchResults);
+  globalSearchInput.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      closeGlobalSearch();
+      globalSearchInput.blur();
+    } else if (event.key === "ArrowDown") {
+      event.preventDefault();
+      $(".global-search-result")?.focus();
+    } else if (event.key === "Enter") {
+      const firstResult = $(".global-search-result");
+      if (firstResult) {
+        event.preventDefault();
+        firstResult.click();
+      }
+    }
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (!event.target.closest?.(".global-search")) closeGlobalSearch();
+  });
+
   $("#characterNameDisplay").addEventListener("click", startCharacterNameEdit);
   $("#characterNameInput").addEventListener("blur", () => finishCharacterNameEdit());
   $("#characterNameInput").addEventListener("keydown", (event) => {
@@ -1893,8 +2569,13 @@ function addEventHandlers() {
     });
   });
 
+  $$("[data-character-tab]").forEach((button) => {
+    button.addEventListener("click", () => setActiveCharacterTab(button.dataset.characterTab));
+  });
+
   $$(".view-tab-button").forEach((button) => {
     button.addEventListener("click", () => {
+      closeGlobalSearch();
       setActiveView(button.dataset.viewTab);
     });
   });
@@ -1908,18 +2589,19 @@ function addEventHandlers() {
     });
   });
 
+  $("#undoDelete").addEventListener("click", undoLastDelete);
+  $("#restoreBackup").addEventListener("click", restoreBackup);
   $("#exportData").addEventListener("click", exportData);
   $("#importData").addEventListener("change", importData);
   $("#resetData").addEventListener("click", resetData);
 }
 
 function exportData() {
+  storeVersionedBackup("export");
   const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
   const link = document.createElement("a");
   const characterName = state.character.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || "barbarian";
-  const now = new Date();
-  const pad = (value) => String(value).padStart(2, "0");
-  const timestamp = `${String(now.getFullYear()).slice(-2)}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  const timestamp = formatCompactTimestamp();
   link.href = URL.createObjectURL(blob);
   link.download = `${characterName}-sheet-${timestamp}.json`;
   link.click();
@@ -1932,15 +2614,9 @@ function importData(event) {
   const reader = new FileReader();
   reader.addEventListener("load", () => {
     try {
-      state = mergeDefaults(JSON.parse(reader.result), defaultState);
-      state = normalizeState(state);
-      activeNoteFilter = null;
-      activeInventoryFilter = null;
-      showHiddenInventory = false;
-      showHiddenNotes = false;
-      saveState();
-      syncPathInputs();
-      renderDynamicSections();
+      storeVersionedBackup("pre-import");
+      applyLoadedState(JSON.parse(reader.result));
+      storeVersionedBackup("import");
     } catch {
       alert("That file did not look like a valid character sheet export.");
     } finally {
@@ -1952,23 +2628,13 @@ function importData(event) {
 
 function resetData() {
   if (!confirm("Reset this sheet to the starter version?")) return;
-  state = clone(defaultState);
-  activeNoteFilter = null;
-  noteSearchQuery = "";
-  activeInventoryFilter = null;
-  inventorySearchQuery = "";
-  showHiddenInventory = false;
-  showHiddenNotes = false;
-  saveState();
-  syncPathInputs();
-  const noteSearchInput = $("#noteSearchInput");
-  if (noteSearchInput) noteSearchInput.value = "";
-  const inventorySearchInput = $("#inventorySearchInput");
-  if (inventorySearchInput) inventorySearchInput.value = "";
-  renderDynamicSections();
+  storeVersionedBackup("pre-reset");
+  applyLoadedState(defaultState);
+  storeVersionedBackup("reset");
 }
 
 bindPathInputs();
 addEventHandlers();
 renderDynamicSections();
 setActiveView(activeView);
+setActiveCharacterTab(activeCharacterTab);

@@ -9,7 +9,7 @@
   <body>
     <div class="app-shell">
       <header class="site-header">
-        <div>
+        <div class="header-identity">
           <p class="eyebrow">Crooked Moon Field Record</p>
           <h1 class="character-title">
             <button id="characterNameDisplay" class="title-display" type="button">Experiment Barbarian</button>
@@ -17,15 +17,33 @@
           </h1>
         </div>
         <div class="header-actions">
-          <div class="view-tabs" role="tablist" aria-label="Sheet views">
-            <button class="view-tab-button active" data-view-tab="sheet" type="button">Character Sheet</button>
-            <button class="view-tab-button" data-view-tab="combat" type="button">Combat</button>
-            <button class="view-tab-button" data-view-tab="notes" type="button">Notes</button>
+          <div class="header-primary-actions">
+            <div class="global-search">
+              <label class="sr-only" for="globalSearchInput">Search everything</label>
+              <input
+                id="globalSearchInput"
+                type="search"
+                placeholder="Search everything..."
+                autocomplete="off"
+                aria-controls="globalSearchResults"
+                aria-expanded="false"
+              />
+              <div class="global-search-results" id="globalSearchResults" aria-label="Search results" hidden></div>
+            </div>
+            <div class="view-tabs" role="tablist" aria-label="Sheet views">
+              <button class="view-tab-button active" data-view-tab="sheet" type="button">Character Sheet</button>
+              <button class="view-tab-button" data-view-tab="combat" type="button">Combat</button>
+              <button class="view-tab-button" data-view-tab="notes" type="button">Notes</button>
+            </div>
           </div>
-          <button class="ghost-button" id="exportData" type="button">Export</button>
-          <label class="ghost-button file-label" for="importData">Import</label>
-          <input id="importData" type="file" accept="application/json" />
-          <button class="danger-button" id="resetData" type="button">Reset</button>
+          <div class="header-utility-actions">
+            <button class="ghost-button" id="undoDelete" type="button" hidden>Undo Delete</button>
+            <button class="ghost-button" id="restoreBackup" type="button">Restore Backup</button>
+            <button class="ghost-button" id="exportData" type="button">Export</button>
+            <label class="ghost-button file-label" for="importData">Import</label>
+            <input id="importData" type="file" accept="application/json" />
+            <button class="danger-button" id="resetData" type="button">Reset</button>
+          </div>
         </div>
       </header>
 
@@ -33,63 +51,115 @@
         <section class="panel character-panel" data-views="sheet combat" data-title="Character" data-rage-title="I WILL NEVER DIE">
           <div class="panel-heading">
             <h2>Character</h2>
-            <span class="stitch"></span>
-          </div>
-          <div class="hp-hero">
-            <div class="hp-adjust-group" aria-label="Decrease hit points">
-              <button class="small-button hp-adjust-button" data-hp-adjust="-1" type="button">-1</button>
-              <button class="small-button hp-adjust-button" data-hp-adjust="-5" type="button">-5</button>
+            <div class="character-tabs" role="tablist" aria-label="Character card sections">
+              <button
+                class="character-tab-button active"
+                id="characterTab"
+                data-character-tab="character"
+                type="button"
+                role="tab"
+                aria-controls="characterTabPanel"
+                aria-selected="true"
+              >Character</button>
+              <button
+                class="character-tab-button"
+                id="restTab"
+                data-character-tab="rest"
+                type="button"
+                role="tab"
+                aria-controls="restTabPanel"
+                aria-selected="false"
+              >Rest</button>
             </div>
-            <label class="field hp-main-field">
-              <span>Current HP</span>
-              <input class="hp-main-input" data-path="character.hp" type="number" inputmode="numeric" />
-            </label>
-            <div class="hp-adjust-group" aria-label="Increase hit points">
-              <button class="small-button hp-adjust-button" data-hp-adjust="1" type="button">+1</button>
-              <button class="small-button hp-adjust-button" data-hp-adjust="5" type="button">+5</button>
+          </div>
+          <div id="characterTabPanel" data-character-tab-panel="character" role="tabpanel" aria-labelledby="characterTab">
+            <div class="hp-hero">
+              <div class="hp-adjust-group" aria-label="Decrease hit points">
+                <button class="small-button hp-adjust-button" data-hp-adjust="-1" type="button">-1</button>
+                <button class="small-button hp-adjust-button" data-hp-adjust="-5" type="button">-5</button>
+              </div>
+              <label class="field hp-main-field">
+                <span>Current HP</span>
+                <input class="hp-main-input" data-path="character.hp" type="number" inputmode="numeric" />
+              </label>
+              <div class="hp-adjust-group" aria-label="Increase hit points">
+                <button class="small-button hp-adjust-button" data-hp-adjust="1" type="button">+1</button>
+                <button class="small-button hp-adjust-button" data-hp-adjust="5" type="button">+5</button>
+              </div>
+            </div>
+            <div class="meter-grid hp-supporting-grid">
+              <label class="field">
+                <span>Temp HP</span>
+                <input data-path="character.tempHp" type="number" inputmode="numeric" />
+              </label>
+              <label class="field">
+                <span>Total HP</span>
+                <input data-path="character.totalHp" type="number" inputmode="numeric" />
+              </label>
+            </div>
+            <div class="character-footer">
+              <label class="field character-meta-field character-speed-field">
+                <span>Speed</span>
+                <input data-path="character.speed" type="number" inputmode="numeric" />
+              </label>
+              <div class="character-footer-right">
+                <label class="field character-meta-field">
+                  <span>Level</span>
+                  <input data-path="character.level" type="number" inputmode="numeric" />
+                </label>
+                <label class="field character-meta-field">
+                  <span>Prof</span>
+                  <input id="proficiencyBonus" type="number" inputmode="numeric" />
+                </label>
+              </div>
             </div>
           </div>
-          <div class="meter-grid hp-supporting-grid">
-            <label class="field">
-              <span>Temp HP</span>
-              <input data-path="character.tempHp" type="number" inputmode="numeric" />
-            </label>
-            <label class="field">
-              <span>Total HP</span>
-              <input data-path="character.totalHp" type="number" inputmode="numeric" />
-            </label>
-          </div>
-          <div class="hit-dice-row">
-            <label class="field">
-              <span>Hit Dice Remaining</span>
-              <input data-path="character.hitDiceRemaining" type="number" inputmode="numeric" />
-            </label>
-            <label class="field">
-              <span>Hit Dice Type</span>
-              <select data-path="character.hitDiceType">
-                <option value="d4">d4</option>
-                <option value="d6">d6</option>
-                <option value="d8">d8</option>
-                <option value="d10">d10</option>
-                <option value="d12">d12</option>
-                <option value="d20">d20</option>
-              </select>
-            </label>
-          </div>
-          <div class="character-footer">
-            <label class="field character-meta-field character-speed-field">
-              <span>Speed</span>
-              <input data-path="character.speed" type="number" inputmode="numeric" />
-            </label>
-            <div class="character-footer-right">
-              <label class="field character-meta-field">
-                <span>Level</span>
-                <input data-path="character.level" type="number" inputmode="numeric" />
-              </label>
-              <label class="field character-meta-field">
-                <span>Prof</span>
-                <input id="proficiencyBonus" type="number" inputmode="numeric" />
-              </label>
+          <div id="restTabPanel" class="rest-tab-panel" data-character-tab-panel="rest" role="tabpanel" aria-labelledby="restTab" hidden>
+            <div class="rest-hit-dice-grid">
+              <div class="rest-hit-dice-row">
+                <label class="field">
+                  <span>Hit Dice</span>
+                  <select data-path="character.hitDiceType">
+                    <option value="N/A">N/A</option>
+                    <option value="d4">d4</option>
+                    <option value="d6">d6</option>
+                    <option value="d8">d8</option>
+                    <option value="d10">d10</option>
+                    <option value="d12">d12</option>
+                    <option value="d20">d20</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Current</span>
+                  <input data-path="character.hitDiceRemaining" type="number" inputmode="numeric" min="0" step="1" />
+                </label>
+                <label class="field">
+                  <span>Max</span>
+                  <input data-path="character.hitDiceMax" type="number" inputmode="numeric" min="1" max="20" step="1" />
+                </label>
+              </div>
+              <div class="rest-hit-dice-row">
+                <label class="field">
+                  <span>Hit Dice</span>
+                  <select data-path="character.hitDiceSecondaryType">
+                    <option value="N/A">N/A</option>
+                    <option value="d4">d4</option>
+                    <option value="d6">d6</option>
+                    <option value="d8">d8</option>
+                    <option value="d10">d10</option>
+                    <option value="d12">d12</option>
+                    <option value="d20">d20</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Current</span>
+                  <input data-path="character.hitDiceSecondaryRemaining" type="number" inputmode="numeric" min="0" step="1" />
+                </label>
+                <label class="field">
+                  <span>Max</span>
+                  <input data-path="character.hitDiceSecondaryMax" type="number" inputmode="numeric" min="1" max="20" step="1" />
+                </label>
+              </div>
             </div>
           </div>
         </section>
