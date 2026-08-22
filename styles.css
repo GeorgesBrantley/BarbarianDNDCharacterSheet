@@ -508,6 +508,97 @@ body.view-combat .rage-panel {
   display: none;
 }
 
+.money-tab-panel {
+  min-height: 226px;
+}
+
+.money-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.money-tracker {
+  --coin-light: #f4ead4;
+  --coin-mid: #a99d89;
+  --coin-dark: #5f584d;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(238, 230, 210, 0.18);
+  border-radius: 8px;
+  background:
+    linear-gradient(145deg, rgba(238, 230, 210, 0.07), transparent 55%),
+    rgba(15, 14, 12, 0.45);
+}
+
+.money-tracker-heading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.money-tracker .coin-icon {
+  position: relative;
+  display: grid;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 2px solid var(--coin-dark);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 35% 28%, var(--coin-light), var(--coin-mid) 48%, var(--coin-dark));
+  box-shadow:
+    inset 0 0 0 2px rgba(255, 255, 255, 0.18),
+    0 2px 5px rgba(0, 0, 0, 0.4);
+  color: #211f1b;
+  font-size: 0.75rem;
+  font-weight: 900;
+  line-height: 1;
+  text-shadow: 0 1px rgba(255, 255, 255, 0.35);
+}
+
+.money-tracker .money-label {
+  color: var(--bone);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+.money-tracker input {
+  min-height: 48px;
+  border-color: color-mix(in srgb, var(--coin-mid) 62%, transparent);
+  font-size: 1.2rem;
+  font-weight: 800;
+  text-align: center;
+}
+
+.money-tracker-platinum {
+  --coin-light: #ffffff;
+  --coin-mid: #b8d2d3;
+  --coin-dark: #657f82;
+}
+
+.money-tracker-gold {
+  --coin-light: #fff2a8;
+  --coin-mid: #d6aa35;
+  --coin-dark: #755019;
+}
+
+.money-tracker-silver {
+  --coin-light: #f6f7f7;
+  --coin-mid: #aeb5ba;
+  --coin-dark: #596067;
+}
+
+.money-tracker-bronze {
+  --coin-light: #efbd83;
+  --coin-mid: #a76535;
+  --coin-dark: #61371f;
+}
+
 .actions-panel .panel-heading {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
@@ -682,10 +773,10 @@ input[type="checkbox"] {
   border-bottom-left-radius: 0;
 }
 
-.ac-shield-button {
+.ac-shield-button,
+.inspiration-shield-button {
   position: absolute;
   top: 50%;
-  right: 0;
   display: grid;
   width: 76px;
   height: 92px;
@@ -698,7 +789,17 @@ input[type="checkbox"] {
   transform: translateY(-50%);
 }
 
-.ac-shield-shape {
+.ac-shield-button {
+  right: 0;
+}
+
+.inspiration-shield-button {
+  left: 0;
+  color: rgba(209, 176, 113, 0.68);
+}
+
+.ac-shield-shape,
+.inspiration-shield-shape {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -706,13 +807,38 @@ input[type="checkbox"] {
   overflow: visible;
 }
 
-.ac-shield-shape path {
+.ac-shield-shape path,
+.inspiration-shield-shape path {
   fill: rgba(15, 14, 12, 0.88);
   stroke: currentColor;
   stroke-width: 3;
   transition:
     fill 150ms ease,
     stroke 150ms ease;
+}
+
+.inspiration-shield-content {
+  position: relative;
+  display: grid;
+  gap: 1px;
+  margin-top: -5px;
+  place-items: center;
+  color: rgba(238, 230, 210, 0.35);
+}
+
+.inspiration-shield-label {
+  color: var(--hide);
+  font-size: 0.56rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.inspiration-shield-content strong {
+  font-family: Arial, sans-serif;
+  font-size: 2rem;
+  line-height: 1;
+  transition: color 160ms ease, text-shadow 160ms ease;
 }
 
 .ac-shield-content {
@@ -737,15 +863,38 @@ input[type="checkbox"] {
 }
 
 .ac-shield-button:hover,
-.ac-shield-button:focus-visible {
+.ac-shield-button:focus-visible,
+.inspiration-shield-button:hover,
+.inspiration-shield-button:focus-visible {
   color: var(--suture);
   filter: drop-shadow(0 0 13px rgba(209, 176, 113, 0.36));
   outline: none;
 }
 
 .ac-shield-button:hover .ac-shield-shape path,
-.ac-shield-button:focus-visible .ac-shield-shape path {
+.ac-shield-button:focus-visible .ac-shield-shape path,
+.inspiration-shield-button:hover .inspiration-shield-shape path,
+.inspiration-shield-button:focus-visible .inspiration-shield-shape path {
   fill: rgba(209, 176, 113, 0.12);
+}
+
+.inspiration-shield-button.is-active {
+  color: #f3c95d;
+  animation: heroic-inspiration-glow 1.6s ease-in-out infinite;
+}
+
+.inspiration-shield-button.is-active .inspiration-shield-shape path {
+  fill: rgba(214, 170, 53, 0.2);
+  stroke: #f3c95d;
+}
+
+.inspiration-shield-button.is-active .inspiration-shield-label {
+  color: #ffe9a0;
+}
+
+.inspiration-shield-button.is-active .inspiration-shield-content strong {
+  color: #fff0a8;
+  text-shadow: 0 0 9px rgba(255, 211, 82, 0.88);
 }
 
 .ac-dialog {
@@ -1539,6 +1688,10 @@ body.raging .panel-heading h2 {
   gap: 12px;
 }
 
+.inventory-visibility-button {
+  width: 76px;
+}
+
 .inventory-details {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 84px;
@@ -2059,6 +2212,17 @@ body.raging .panel-heading h2 {
   }
 }
 
+@keyframes heroic-inspiration-glow {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 5px rgba(243, 201, 93, 0.45));
+  }
+
+  50% {
+    filter: drop-shadow(0 0 16px rgba(255, 218, 105, 0.95));
+  }
+}
+
 @keyframes rest-reminder-in {
   0% {
     opacity: 0;
@@ -2106,16 +2270,32 @@ body.raging .panel-heading h2 {
 @media (max-width: 900px) {
   .hp-hero {
     display: grid;
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 12px;
-    justify-items: center;
+  }
+
+  .hp-control-cluster {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+
+  .ac-shield-button,
+  .inspiration-shield-button {
+    position: relative;
+    top: auto;
+    transform: none;
+  }
+
+  .inspiration-shield-button {
+    grid-column: 1;
+    grid-row: 2;
+    justify-self: start;
   }
 
   .ac-shield-button {
-    position: relative;
-    top: auto;
-    right: auto;
-    transform: none;
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: end;
   }
 }
 
@@ -2191,8 +2371,7 @@ body.raging .panel-heading h2 {
   }
 
   .hp-hero {
-    grid-template-columns: 1fr;
-    justify-items: center;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .hp-control-cluster {
@@ -2207,6 +2386,14 @@ body.raging .panel-heading h2 {
   .hp-main-input {
     max-width: none;
     width: 100%;
+  }
+
+  .inspiration-shield-button {
+    left: auto;
+  }
+
+  .ac-shield-button {
+    right: auto;
   }
 
   .character-footer,
@@ -2246,6 +2433,10 @@ body.raging .panel-heading h2 {
     grid-template-columns: 1fr;
   }
 
+  .inventory-visibility-button {
+    width: auto;
+  }
+
   .charges-section {
     grid-template-columns: 1fr;
   }
@@ -2268,5 +2459,12 @@ body.raging .panel-heading h2 {
 
   .actions-panel .panel-heading {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .inspiration-shield-button.is-active {
+    animation: none;
+    filter: drop-shadow(0 0 12px rgba(255, 218, 105, 0.82));
   }
 }

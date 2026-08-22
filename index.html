@@ -63,6 +63,15 @@
               >Character</button>
               <button
                 class="character-tab-button"
+                id="moneyTab"
+                data-character-tab="money"
+                type="button"
+                role="tab"
+                aria-controls="moneyTabPanel"
+                aria-selected="false"
+              >Money</button>
+              <button
+                class="character-tab-button"
                 id="restTab"
                 data-character-tab="rest"
                 type="button"
@@ -88,6 +97,22 @@
                   <button class="small-button hp-adjust-button" data-hp-adjust="5" type="button">+5</button>
                 </div>
               </div>
+              <button
+                class="inspiration-shield-button"
+                id="heroicInspirationButton"
+                type="button"
+                aria-label="Heroic Inspiration not available. Toggle Heroic Inspiration"
+                aria-pressed="false"
+                title="Toggle Heroic Inspiration"
+              >
+                <svg class="inspiration-shield-shape" viewBox="0 0 80 96" aria-hidden="true">
+                  <path d="M40 3 72 14v29c0 22-12 38-32 50C20 81 8 65 8 43V14Z"></path>
+                </svg>
+                <span class="inspiration-shield-content" aria-hidden="true">
+                  <span class="inspiration-shield-label">Heroic</span>
+                  <strong>✓</strong>
+                </span>
+              </button>
               <button class="ac-shield-button" id="acShieldButton" type="button" aria-label="Armor Class 10. Edit Armor Class">
                 <svg class="ac-shield-shape" viewBox="0 0 80 96" aria-hidden="true">
                   <path d="M40 3 72 14v29c0 22-12 38-32 50C20 81 8 65 8 43V14Z"></path>
@@ -123,6 +148,38 @@
                   <input id="proficiencyBonus" type="number" inputmode="numeric" />
                 </label>
               </div>
+            </div>
+          </div>
+          <div id="moneyTabPanel" class="money-tab-panel" data-character-tab-panel="money" role="tabpanel" aria-labelledby="moneyTab" hidden>
+            <div class="money-grid">
+              <label class="money-tracker money-tracker-platinum">
+                <span class="money-tracker-heading">
+                  <span class="coin-icon" aria-hidden="true">P</span>
+                  <span class="money-label">Platinum</span>
+                </span>
+                <input data-path="money.platinum" type="number" inputmode="numeric" min="0" step="1" aria-label="Platinum coins" />
+              </label>
+              <label class="money-tracker money-tracker-gold">
+                <span class="money-tracker-heading">
+                  <span class="coin-icon" aria-hidden="true">G</span>
+                  <span class="money-label">Gold</span>
+                </span>
+                <input data-path="money.gold" type="number" inputmode="numeric" min="0" step="1" aria-label="Gold coins" />
+              </label>
+              <label class="money-tracker money-tracker-silver">
+                <span class="money-tracker-heading">
+                  <span class="coin-icon" aria-hidden="true">S</span>
+                  <span class="money-label">Silver</span>
+                </span>
+                <input data-path="money.silver" type="number" inputmode="numeric" min="0" step="1" aria-label="Silver coins" />
+              </label>
+              <label class="money-tracker money-tracker-bronze">
+                <span class="money-tracker-heading">
+                  <span class="coin-icon" aria-hidden="true">B</span>
+                  <span class="money-label">Bronze</span>
+                </span>
+                <input data-path="money.bronze" type="number" inputmode="numeric" min="0" step="1" aria-label="Bronze coins" />
+              </label>
             </div>
           </div>
           <div id="restTabPanel" class="rest-tab-panel" data-character-tab-panel="rest" role="tabpanel" aria-labelledby="restTab" hidden>

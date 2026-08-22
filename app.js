@@ -72,12 +72,19 @@ const defaultState = {
     totalHp: 0,
     armorClass: 10,
     armorClassNotes: "",
+    heroicInspiration: false,
     hitDiceUsed: 0,
     hitDiceTotal: 1,
     hitDiceType: "d12",
     hitDiceSecondaryUsed: 0,
     hitDiceSecondaryTotal: 1,
     hitDiceSecondaryType: "N/A",
+  },
+  money: {
+    platinum: 0,
+    gold: 0,
+    silver: 0,
+    bronze: 0,
   },
   rage: {
     total: 2,
@@ -359,6 +366,19 @@ function normalizeState(nextState) {
   const normalized = clone(nextState);
   normalized.character.armorClass = clampInteger(normalized.character.armorClass, 0, 99, 10);
   normalized.character.armorClassNotes = String(normalized.character.armorClassNotes || "");
+  normalized.character.heroicInspiration = Boolean(normalized.character.heroicInspiration);
+  normalized.money = {
+    ...defaultState.money,
+    ...(normalized.money || {}),
+  };
+  Object.keys(defaultState.money).forEach((denomination) => {
+    normalized.money[denomination] = clampInteger(
+      normalized.money[denomination],
+      0,
+      Number.MAX_SAFE_INTEGER,
+      0,
+    );
+  });
   const hitDice = normalized.character?.hitDice;
   if (normalized.character.hitDiceRemaining == null && typeof hitDice === "string") {
     const match = hitDice.trim().match(/^(\d+)\s*(d\d+)$/i);
@@ -523,6 +543,7 @@ function saveState() {
   clampCharacterHp();
   clampCharacterArmorClass();
   clampCharacterHitDice();
+  clampMoney();
   clampFighterUses();
   const serializedState = JSON.stringify(state);
   localStorage.setItem(STORAGE_KEY, serializedState);
@@ -567,6 +588,18 @@ function syncArmorClassShield() {
   shield.setAttribute("aria-label", `Armor Class ${state.character.armorClass}. Edit Armor Class`);
 }
 
+function syncHeroicInspirationButton() {
+  const button = $("#heroicInspirationButton");
+  if (!button) return;
+  const isActive = Boolean(state.character.heroicInspiration);
+  button.classList.toggle("is-active", isActive);
+  button.setAttribute("aria-pressed", String(isActive));
+  button.setAttribute(
+    "aria-label",
+    `${isActive ? "Heroic Inspiration available" : "Heroic Inspiration not available"}. Toggle Heroic Inspiration`,
+  );
+}
+
 function clampCharacterHitDice() {
   [
     ["hitDiceUsed", "hitDiceTotal", "hitDiceType"],
@@ -577,6 +610,17 @@ function clampCharacterHitDice() {
     state.character[usedKey] = state.character[typeKey] === "N/A"
       ? 0
       : clampInteger(state.character[usedKey], 0, total, 0);
+  });
+}
+
+function clampMoney() {
+  Object.keys(defaultState.money).forEach((denomination) => {
+    state.money[denomination] = clampInteger(
+      state.money[denomination],
+      0,
+      Number.MAX_SAFE_INTEGER,
+      0,
+    );
   });
 }
 
@@ -787,6 +831,9 @@ function bindPathInputs() {
       }
       if (input.dataset.path.startsWith("character.hitDice")) {
         syncCharacterHitDiceInputs();
+      }
+      if (input.dataset.path.startsWith("money.")) {
+        syncPathInput(input);
       }
       if (input.dataset.path.startsWith("fighter.")) {
         syncFighterInputs();
@@ -1864,7 +1911,8 @@ function renderInventory() {
       name.textContent = item.name || "New Item";
       const notes = item.notes?.replace(/\s+/g, " ").trim() || "";
       const preview = notes.length > 64 ? `${notes.slice(0, 64)}...` : notes;
-      summary.textContent = `Qty ${item.quantity || 0}${preview ? ` • ${preview}` : ""}`;
+      summary.textContent = preview;
+      summary.hidden = !preview;
     };
     updateInventoryHeader();
     title.append(name, summary);
@@ -1872,7 +1920,7 @@ function renderInventory() {
     const controls = document.createElement("div");
     controls.className = "action-controls";
     const hideButton = document.createElement("button");
-    hideButton.className = "small-button";
+    hideButton.className = "small-button inventory-visibility-button";
     hideButton.type = "button";
     hideButton.textContent = item.hidden ? "Unhide" : "Hide";
     hideButton.addEventListener("click", () => {
@@ -1927,7 +1975,6 @@ function renderInventory() {
       }, "Item name")),
       labeled("Qty", textInput(item.quantity, (value) => {
         item.quantity = value;
-        updateInventoryHeader();
       }, "", "number")),
       labeled("Description", textArea(item.notes, (value) => {
         item.notes = value;
@@ -2574,6 +2621,7 @@ function updateComputedValues() {
   syncRageTheme();
   syncCharacterNameTitle();
   syncArmorClassShield();
+  syncHeroicInspirationButton();
   updateRageButton(remaining);
   updateFighterButtons();
   updateRageTitles();
@@ -2683,6 +2731,10 @@ function addEventHandlers() {
   });
 
   $("#acShieldButton").addEventListener("click", openArmorClassDialog);
+  $("#heroicInspirationButton").addEventListener("click", () => {
+    state.character.heroicInspiration = !state.character.heroicInspiration;
+    saveState();
+  });
   $("#acDialogForm").addEventListener("submit", saveArmorClass);
   $("#closeAcDialog").addEventListener("click", closeArmorClassDialog);
   $("#cancelAcDialog").addEventListener("click", closeArmorClassDialog);
