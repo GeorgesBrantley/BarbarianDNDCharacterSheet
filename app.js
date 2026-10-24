@@ -1,5 +1,6 @@
 const STORAGE_KEY = "experiment-barbarian-sheet-v1";
 const BACKUP_STORAGE_KEY = `${STORAGE_KEY}-backups`;
+const SAVE_FEEDBACK_STORAGE_KEY = `${STORAGE_KEY}-save-feedback`;
 const MAX_BACKUPS = 12;
 const AUTO_BACKUP_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_CHARACTER_TITLE = "Experiment Barbarian";
@@ -61,6 +62,7 @@ const defaultState = {
   ui: {
     collapsedSkillGroups: {},
     reckless: false,
+    quickBarCollapsed: false,
   },
   character: {
     name: "",
@@ -164,9 +166,11 @@ const defaultState = {
     backstory: [],
     sessions: [],
   },
+  timeline: [],
 };
 
 let state = loadState();
+let saveFeedback = loadSaveFeedback();
 let activeNoteTab = "locations";
 let activeView = "sheet";
 let activeCharacterTab = "character";
@@ -180,8 +184,13 @@ let showHiddenNotes = false;
 let globalSearchQuery = "";
 let pendingUndoAction = null;
 let featureFlashTimer = null;
+let quickBarFavoritesSignature = "";
+let quickBarTooltipAnchor = null;
+let quickBarTooltipTimer = null;
 let lastAutoBackupAt = 0;
 let lastBackupSignature = JSON.stringify(state);
+let timelineSnapshot = captureTimelineSnapshot();
+const timelineNoteEdits = new Map();
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
@@ -218,6 +227,36 @@ function formatBackupTimestamp(timestamp) {
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return "Unknown time";
   return date.toLocaleString();
+}
+
+function loadSaveFeedback() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SAVE_FEEDBACK_STORAGE_KEY)) || {};
+    const validTimestamp = (value) => typeof value === "string" && Number.isFinite(new Date(value).getTime()) ? value : null;
+    return {
+      lastSavedAt: validTimestamp(saved.lastSavedAt),
+      lastExportedAt: validTimestamp(saved.lastExportedAt),
+    };
+  } catch {
+    return { lastSavedAt: null, lastExportedAt: null };
+  }
+}
+
+function recordSaveFeedback(key) {
+  const next = { ...saveFeedback, [key]: new Date().toISOString() };
+  localStorage.setItem(SAVE_FEEDBACK_STORAGE_KEY, JSON.stringify(next));
+  saveFeedback = next;
+  renderSaveFeedback();
+}
+
+function renderSaveFeedback() {
+  for (const [selector, timestamp] of [["#lastSavedTime", saveFeedback.lastSavedAt], ["#lastExportedTime", saveFeedback.lastExportedAt]]) {
+    const element = $(selector);
+    if (!element) continue;
+    element.textContent = timestamp ? formatBackupTimestamp(timestamp) : "Not yet";
+    if (timestamp) element.dateTime = timestamp;
+    else element.removeAttribute("datetime");
+  }
 }
 
 function formatBackupReason(reason) {
@@ -302,6 +341,8 @@ function clearSearchInputs() {
 
 function applyLoadedState(nextState) {
   state = normalizeState(mergeDefaults(clone(nextState), defaultState));
+  timelineSnapshot = captureTimelineSnapshot();
+  timelineNoteEdits.clear();
   activeNoteFilter = null;
   noteSearchQuery = "";
   activeInventoryFilter = null;
@@ -536,19 +577,159 @@ function normalizeState(nextState) {
     });
   }
   delete normalized.potions;
+  normalized.timeline = (Array.isArray(normalized.timeline) ? normalized.timeline : []).filter((entry) => (
+    entry && ["hp", "resource", "rest", "note"].includes(entry.type) &&
+    typeof entry.title === "string" && typeof entry.details === "string" &&
+    typeof entry.timestamp === "string" && Number.isFinite(new Date(entry.timestamp).getTime())
+  ));
   return normalized;
 }
 
-function saveState() {
+function saveState(restTitle = "") {
   clampCharacterHp();
   clampCharacterArmorClass();
   clampCharacterHitDice();
   clampMoney();
   clampFighterUses();
+  recordTimelineChanges(restTitle);
   const serializedState = JSON.stringify(state);
   localStorage.setItem(STORAGE_KEY, serializedState);
+  recordSaveFeedback("lastSavedAt");
   maybeCreateVersionedBackup(serializedState);
   updateComputedValues();
+  if (activeView === "timeline") renderTimeline();
+}
+
+function captureTimelineSnapshot() {
+  const counters = new Map([
+    ["hp", { label: "HP", value: Number(state.character.hp || 0), type: "hp" }],
+    ["tempHp", { label: "Temporary HP", value: Number(state.character.tempHp || 0), type: "hp" }],
+    ["totalHp", { label: "Maximum HP", value: Number(state.character.totalHp || 0), type: "hp" }],
+    ["rage", { label: "Rages used", value: Number(state.rage.used || 0), type: "resource" }],
+    ["secondWind", { label: "Second Wind uses spent", value: Number(state.fighter.secondWindUsed || 0), type: "resource" }],
+    ["actionSurge", { label: "Action Surge uses spent", value: Number(state.fighter.actionSurgeUsed || 0), type: "resource" }],
+    ["hitDice", { label: `Hit dice used (${state.character.hitDiceType})`, value: Number(state.character.hitDiceUsed || 0), type: "resource" }],
+    ["hitDiceSecondary", { label: `Hit dice used (${state.character.hitDiceSecondaryType})`, value: Number(state.character.hitDiceSecondaryUsed || 0), type: "resource" }],
+  ]);
+  const items = new Map();
+  for (const [collection, label] of [[state.actions, "Attack"], [state.abilities, "Ability"], [state.inventory, "Item"]]) {
+    collection.forEach((item) => items.set(item, {
+      name: item.name?.trim() || label,
+      chargesUsed: Number(item.chargesUsed || 0),
+      quantity: collection === state.inventory ? Number(item.quantity || 0) : null,
+    }));
+  }
+  const notes = new Map();
+  notes.set(state.notes, { title: "Session scratch pad", body: String(state.notes.sessionScratchPad || "") });
+  for (const category of ["locations", "people", "plot", "backstory", "sessions"]) {
+    state.notes[category].forEach((note) => notes.set(note, {
+      title: category === "sessions" ? `Session ${note.sessionNumber || "note"}${note.date ? ` · ${note.date}` : ""}` : note.title || "Untitled knowledge",
+      body: String(note.body || ""),
+    }));
+  }
+  return {
+    counters, items, notes,
+    inspiration: Boolean(state.character.heroicInspiration),
+    serum: state.rage.inRage ? state.rage.activeType || "Rage" : "",
+  };
+}
+
+function addTimelineEntry(type, title, details) {
+  const entry = { type, title, details, timestamp: new Date().toISOString() };
+  state.timeline.push(entry);
+  return entry;
+}
+
+function recordTimelineChanges(restTitle = "") {
+  const next = captureTimelineSnapshot();
+  const changes = [];
+  const recordCounter = (label, before, after, type = "resource") => {
+    if (before === after) return;
+    const delta = after - before;
+    changes.push({ type, title: label, details: `${before} → ${after} (${delta > 0 ? "+" : ""}${delta})` });
+  };
+  next.counters.forEach((counter, key) => {
+    const previous = timelineSnapshot.counters.get(key);
+    if (previous) recordCounter(counter.label, previous.value, counter.value, counter.type);
+  });
+  next.items.forEach((item, key) => {
+    const previous = timelineSnapshot.items.get(key);
+    if (!previous) return;
+    recordCounter(`${item.name} charges used`, previous.chargesUsed, item.chargesUsed);
+    if (item.quantity !== null) recordCounter(`${item.name} quantity`, previous.quantity, item.quantity);
+  });
+  if (next.inspiration !== timelineSnapshot.inspiration) {
+    changes.push({ type: "resource", title: "Heroic Inspiration", details: next.inspiration ? "Gained inspiration." : "Spent inspiration." });
+  }
+  if (next.serum !== timelineSnapshot.serum) {
+    const serumName = EXPERIMENT_RAGES.find((serum) => serum.key === next.serum)?.name || next.serum;
+    const title = next.serum ? (timelineSnapshot.serum ? "Rage serum changed" : "Rage activated") : "Rage ended";
+    changes.push({ type: "resource", title, details: next.serum ? `Active serum: ${serumName}.` : "Left rage." });
+  }
+  if (restTitle) {
+    addTimelineEntry("rest", restTitle, changes.map((change) => `${change.title}: ${change.details}`).join("\n") || "No tracked HP or resources changed.");
+  } else {
+    changes.forEach((change) => addTimelineEntry(change.type, change.title, change.details));
+  }
+  next.notes.forEach((note, key) => {
+    const previous = timelineSnapshot.notes.get(key);
+    if (previous?.title === note.title && previous?.body === note.body) return;
+    if (!previous && !note.body.trim() && !key.title?.trim()) return;
+    // Keep one evolving snapshot while typing, then start a new entry after focus leaves the field.
+    let entry = timelineNoteEdits.get(key);
+    if (!entry) {
+      entry = addTimelineEntry("note", "", "");
+      timelineNoteEdits.set(key, entry);
+    }
+    entry.title = `Note saved: ${note.title}`;
+    entry.details = note.body || "No note text.";
+    entry.timestamp = new Date().toISOString();
+  });
+  timelineSnapshot = next;
+}
+
+function renderTimeline() {
+  const list = $("#timelineList");
+  if (!list) return;
+  list.replaceChildren();
+  $("#timelineCount").textContent = `${state.timeline.length} ${state.timeline.length === 1 ? "event" : "events"}`;
+  if (!state.timeline.length) {
+    renderEmpty(list, "HP changes, resource use, rests, and note edits will appear automatically.");
+    return;
+  }
+  let previousDay = "";
+  let dayList;
+  state.timeline.slice().reverse().forEach((entry) => {
+    const date = new Date(entry.timestamp);
+    const day = date.toLocaleDateString();
+    if (day !== previousDay) {
+      const heading = document.createElement("h3");
+      heading.className = "timeline-date";
+      heading.textContent = date.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+      dayList = document.createElement("ol");
+      dayList.className = "timeline-events";
+      list.append(heading, dayList);
+      previousDay = day;
+    }
+    const item = document.createElement("li");
+    item.className = `timeline-event timeline-event-${entry.type}`;
+    const meta = document.createElement("div");
+    meta.className = "timeline-event-meta";
+    const badge = document.createElement("span");
+    badge.className = "timeline-badge";
+    badge.textContent = { hp: "Health", resource: "Resource", rest: "Rest", note: "Note" }[entry.type];
+    const time = document.createElement("time");
+    time.dateTime = entry.timestamp;
+    time.textContent = date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", second: "2-digit" });
+    const title = document.createElement("h4");
+    title.textContent = entry.title;
+    const details = document.createElement("p");
+    details.className = "timeline-event-details";
+    details.textContent = entry.details;
+    meta.append(badge, time);
+    item.append(meta, title, details);
+    dayList.append(item);
+  });
 }
 
 function getByPath(path) {
@@ -749,7 +930,7 @@ function adjustCharacterHp(amount) {
 function takeShortRest() {
   state.rage.used = Math.max(0, Number(state.rage.used || 0) - 1);
   state.fighter.secondWindUsed = Math.max(0, Number(state.fighter.secondWindUsed || 0) - 1);
-  saveState();
+  saveState("Short rest");
   syncRageInputs();
   syncFighterInputs();
 }
@@ -760,7 +941,7 @@ function takeLongRest() {
   state.character.hitDiceSecondaryUsed = 0;
   state.rage.used = 0;
   state.fighter.secondWindUsed = 0;
-  saveState();
+  saveState("Long rest");
   syncCharacterHpInputs();
   syncCharacterHitDiceInputs();
   syncRageInputs();
@@ -1677,7 +1858,7 @@ function renderActions() {
       toggle.setAttribute("aria-label", toggle.title);
       saveState();
     });
-    controls.append(handle, toggle, removeButton(
+    controls.append(favoriteButton(action, "attack"), handle, toggle, removeButton(
       () => state.actions.splice(index, 1),
       () => {
         const deletedAction = clone(action);
@@ -1949,7 +2130,7 @@ function renderInventory() {
       saveState();
     });
     if (handle) controls.append(handle);
-    controls.append(hideButton, toggle, removeButton(
+    controls.append(favoriteButton(item, "item"), hideButton, toggle, removeButton(
       () => {
         activeInventoryFilter = null;
         state.inventory.splice(index, 1);
@@ -1967,6 +2148,11 @@ function renderInventory() {
     ));
     header.append(title, controls);
 
+    const hotbarNameField = labeled("Hotbar shorthand", textInput(item.hotbarName || "", (value) => {
+      item.hotbarName = value;
+    }, "Optional short name for the hotbar"));
+    hotbarNameField.classList.add("inventory-hotbar-name");
+
     details.append(
       labeled("Item", textInput(item.name, (value) => {
         item.name = value;
@@ -1976,6 +2162,7 @@ function renderInventory() {
       labeled("Qty", textInput(item.quantity, (value) => {
         item.quantity = value;
       }, "", "number")),
+      hotbarNameField,
       labeled("Description", textArea(item.notes, (value) => {
         item.notes = value;
         updateInventoryHeader();
@@ -2605,6 +2792,7 @@ function renderDynamicSections() {
   renderNotes();
   renderSessionNotes();
   renderNoteSearchResults();
+  renderTimeline();
   syncUndoButton();
   syncBackupButton();
   updateComputedValues();
@@ -2622,6 +2810,7 @@ function updateComputedValues() {
   syncCharacterNameTitle();
   syncArmorClassShield();
   syncHeroicInspirationButton();
+  syncCombatQuickBar();
   updateRageButton(remaining);
   updateFighterButtons();
   updateRageTitles();
@@ -2629,6 +2818,151 @@ function updateComputedValues() {
   if (hpInput) {
     hpInput.style.setProperty("--hp-danger", hpDanger.toFixed(3));
   }
+}
+
+function syncCombatQuickBar() {
+  const collapsed = Boolean(state.ui.quickBarCollapsed);
+  const currentHp = Number(state.character.hp || 0);
+  const totalHp = Number(state.character.totalHp || 0);
+  const toggle = $("#quickBarToggle");
+  const toggleLabel = `${collapsed ? "Expand" : "Collapse"} combat quick bar`;
+  $("#combatQuickBar").classList.toggle("is-collapsed", collapsed);
+  $("#combatQuickBarContent").hidden = collapsed;
+  toggle.setAttribute("aria-expanded", String(!collapsed));
+  toggle.setAttribute("aria-label", toggleLabel);
+  toggle.title = toggleLabel;
+  toggle.firstElementChild.textContent = collapsed ? "›" : "‹";
+  $("#quickBarHpValue").textContent = String(currentHp);
+  $("#quickBarHpTotal").textContent = totalHp > 0 ? ` / ${totalHp}` : "";
+  $("#quickBarHealth").setAttribute(
+    "aria-label",
+    `Current HP: ${currentHp}${totalHp > 0 ? ` of ${totalHp}` : ""}. Go to the top of Combat`,
+  );
+  const inRage = Boolean(state.rage.inRage);
+  const rageLabel = inRage ? "Raging" : "Not raging";
+  const rageValue = $("#quickBarRageValue");
+  if (rageValue.textContent !== rageLabel) rageValue.textContent = rageLabel;
+  $("#quickBarRage").classList.toggle("is-active", inRage);
+  $("#quickBarRage").setAttribute("aria-label", `${rageLabel}. Go to Rage in Combat`);
+  if (collapsed) hideQuickBarTooltip();
+  renderQuickBarFavorites();
+}
+
+function favoriteButton(entry, kind) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "small-button favorite-button";
+  const update = () => {
+    const favorite = Boolean(entry.favorite);
+    button.textContent = favorite ? "★" : "☆";
+    button.classList.toggle("is-active", favorite);
+    button.setAttribute("aria-pressed", String(favorite));
+    button.title = favorite ? `Remove ${kind} from quick bar` : `Add ${kind} to quick bar`;
+    button.setAttribute("aria-label", button.title);
+  };
+  button.addEventListener("click", () => {
+    entry.favorite = !entry.favorite;
+    update();
+    saveState();
+  });
+  update();
+  return button;
+}
+
+function getQuickBarFavorites() {
+  return [["action", state.actions], ["inventory", state.inventory]].flatMap(([kind, entries]) => (
+    entries.flatMap((entry, index) => {
+      if (!entry.favorite) return [];
+      const attack = kind === "action";
+      const details = attack
+        ? [`To hit: ${entry.toHit || "—"}`, `Damage: ${entry.damage || "—"}`, entry.description || "No description yet."]
+        : [`Quantity: ${entry.quantity ?? 0}`, entry.notes || "No description yet."];
+      const total = Number(entry.chargesTotal || 0);
+      if (total > 0) details.push(`Charges: ${Math.max(0, total - Number(entry.chargesUsed || 0))} / ${total}`);
+      const name = entry.name || (attack ? "New Action" : "New Item");
+      const hotbarName = !attack && typeof entry.hotbarName === "string" ? entry.hotbarName.trim() : "";
+      return [{ kind, index, name, hotbarName: hotbarName || name, details }];
+    })
+  ));
+}
+
+function renderQuickBarFavorites() {
+  const favorites = getQuickBarFavorites();
+  const signature = JSON.stringify(favorites);
+  if (signature === quickBarFavoritesSignature) return;
+  quickBarFavoritesSignature = signature;
+  hideQuickBarTooltip();
+  const list = $("#quickBarFavorites");
+  list.replaceChildren();
+  list.hidden = favorites.length === 0;
+  favorites.forEach((favorite) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "quick-bar-favorite";
+    button.dataset.favoriteKind = favorite.kind;
+    button.dataset.favoriteIndex = String(favorite.index);
+    const icon = document.createElement("span");
+    icon.className = "quick-bar-favorite-icon";
+    icon.setAttribute("aria-hidden", "true");
+    icon.textContent = favorite.kind === "action" ? "⚔" : "🎒";
+    const name = document.createElement("span");
+    name.className = "quick-bar-favorite-name";
+    name.textContent = favorite.hotbarName;
+    const accessibleName = favorite.hotbarName === favorite.name ? favorite.name : `${favorite.hotbarName} (${favorite.name})`;
+    button.setAttribute("aria-label", `${favorite.kind === "action" ? "Attack" : "Item"}: ${accessibleName}. Go to details`);
+    button.append(icon, name);
+    button.addEventListener("click", () => {
+      hideQuickBarTooltip();
+      openGlobalSearchResult({ kind: favorite.kind, index: favorite.index, view: favorite.kind === "action" ? "combat" : "sheet" });
+    });
+    button.addEventListener("mouseenter", () => showQuickBarTooltip(button, favorite));
+    button.addEventListener("focus", () => showQuickBarTooltip(button, favorite));
+    button.addEventListener("mouseleave", scheduleQuickBarTooltipHide);
+    button.addEventListener("blur", scheduleQuickBarTooltipHide);
+    list.append(button);
+  });
+}
+
+function showQuickBarTooltip(button, favorite) {
+  hideQuickBarTooltip();
+  quickBarTooltipAnchor = button;
+  button.setAttribute("aria-describedby", "quickBarTooltip");
+  const tooltip = $("#quickBarTooltip");
+  const title = document.createElement("strong");
+  title.textContent = favorite.name;
+  tooltip.replaceChildren(title);
+  favorite.details.forEach((text) => {
+    const paragraph = document.createElement("p");
+    paragraph.textContent = text;
+    tooltip.append(paragraph);
+  });
+  tooltip.hidden = false;
+  positionQuickBarTooltip();
+}
+
+function positionQuickBarTooltip() {
+  if (!quickBarTooltipAnchor) return;
+  const tooltip = $("#quickBarTooltip");
+  const rect = quickBarTooltipAnchor.getBoundingClientRect();
+  const bar = $("#combatQuickBar").getBoundingClientRect();
+  if (rect.right <= 44 || rect.left >= bar.right) {
+    hideQuickBarTooltip();
+    return;
+  }
+  tooltip.style.left = `${Math.max(12, Math.min(rect.left, window.innerWidth - tooltip.offsetWidth - 12))}px`;
+  tooltip.style.bottom = `${window.innerHeight - bar.top + 8}px`;
+}
+
+function scheduleQuickBarTooltipHide() {
+  window.clearTimeout(quickBarTooltipTimer);
+  quickBarTooltipTimer = window.setTimeout(hideQuickBarTooltip, 120);
+}
+
+function hideQuickBarTooltip() {
+  window.clearTimeout(quickBarTooltipTimer);
+  quickBarTooltipAnchor?.removeAttribute("aria-describedby");
+  quickBarTooltipAnchor = null;
+  $("#quickBarTooltip").hidden = true;
 }
 
 function updateFighterButtons() {
@@ -2683,15 +3017,71 @@ function syncViewPanels() {
 
 function setActiveView(nextView) {
   activeView = nextView;
-  document.body.classList.remove("view-sheet", "view-combat", "view-notes");
+  timelineNoteEdits.clear();
+  document.body.classList.remove("view-sheet", "view-combat", "view-notes", "view-timeline");
   document.body.classList.add(`view-${nextView}`);
   $$(".view-tab-button").forEach((button) => {
     button.classList.toggle("active", button.dataset.viewTab === nextView);
   });
+  $("#timelineButton").setAttribute("aria-pressed", String(nextView === "timeline"));
+  if (nextView === "timeline") renderTimeline();
   syncViewPanels();
 }
 
+function handleViewShortcut(event) {
+  if (
+    event.defaultPrevented || event.isComposing || event.repeat ||
+    event.ctrlKey || event.metaKey || event.altKey || event.shiftKey
+  ) return;
+
+  const target = event.target;
+  if (target?.isContentEditable || target?.closest?.("input, textarea, select")) return;
+
+  if (event.key === "0") {
+    event.preventDefault();
+    window.scrollTo({ top: 0, behavior: "instant" });
+    $("#globalSearchInput").focus({ preventScroll: true });
+    return;
+  }
+
+  const views = ["sheet", "combat", "notes"];
+  const index = ["1", "2", "3"].indexOf(event.key);
+  if (index === -1) return;
+
+  event.preventDefault();
+  closeGlobalSearch();
+  setActiveView(views[index]);
+}
+
 function addEventHandlers() {
+  $("#quickBarRage").addEventListener("click", () => {
+    openGlobalSearchResult({ kind: "rage", view: "combat" });
+  });
+  $("#quickBarTooltip").addEventListener("mouseenter", () => window.clearTimeout(quickBarTooltipTimer));
+  $("#quickBarTooltip").addEventListener("mouseleave", scheduleQuickBarTooltipHide);
+  $("#combatQuickBarContent").addEventListener("scroll", positionQuickBarTooltip);
+  window.addEventListener("resize", positionQuickBarTooltip);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") hideQuickBarTooltip();
+  });
+  $("#quickBarToggle").addEventListener("click", () => {
+    state.ui.quickBarCollapsed = !state.ui.quickBarCollapsed;
+    saveState();
+  });
+  $("#quickBarHealth").addEventListener("click", () => {
+    closeGlobalSearch();
+    setActiveView("combat");
+    setActiveCharacterTab("character");
+    window.scrollTo({ top: 0, behavior: "instant" });
+    $("[data-path='character.hp']").focus({ preventScroll: true });
+  });
+  document.addEventListener("keydown", handleViewShortcut);
+  document.addEventListener("focusout", () => timelineNoteEdits.clear());
+  $("#timelineButton").addEventListener("click", () => {
+    closeGlobalSearch();
+    setActiveView("timeline");
+  });
+
   const globalSearchInput = $("#globalSearchInput");
   globalSearchInput.addEventListener("input", () => {
     globalSearchQuery = globalSearchInput.value;
@@ -2896,56 +3286,21 @@ function downloadExport(json, filename) {
   const link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
   link.download = filename;
+  document.body.append(link);
   link.click();
-  URL.revokeObjectURL(link.href);
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(link.href), 1000);
 }
 
-async function exportData() {
+function exportData() {
   storeVersionedBackup("export");
   const characterName = state.character.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || "barbarian";
   const timestamp = formatCompactTimestamp();
   const filename = `${characterName}-sheet-${timestamp}.json`;
   const json = JSON.stringify(state, null, 2);
 
-  if (!("showDirectoryPicker" in window)) {
-    alert("This browser cannot write directly to the Saves folder. The export will use your Downloads folder instead.");
-    downloadExport(json, filename);
-    return;
-  }
-
-  try {
-    const selectedDirectory = await window.showDirectoryPicker({
-      id: "odyn-character-saves",
-      mode: "readwrite",
-      startIn: "documents",
-    });
-    let savesDirectory = selectedDirectory;
-    if (selectedDirectory.name.toLowerCase() !== "saves") {
-      try {
-        savesDirectory = await selectedDirectory.getDirectoryHandle("Saves");
-      } catch (error) {
-        if (error.name === "NotFoundError") {
-          alert("Choose either the Odyn Webapp folder or its Saves folder.");
-          return;
-        }
-        throw error;
-      }
-    }
-    const fileHandle = await savesDirectory.getFileHandle(filename, { create: true });
-    const writable = await fileHandle.createWritable();
-    await writable.write(json);
-    await writable.close();
-
-    const exportButton = $("#exportData");
-    exportButton.textContent = "Saved";
-    window.setTimeout(() => {
-      exportButton.textContent = "Export to Saves";
-    }, 1600);
-  } catch (error) {
-    if (error.name === "AbortError") return;
-    console.error("Could not export to Saves", error);
-    alert("The export could not be written to the Saves folder.");
-  }
+  downloadExport(json, filename);
+  recordSaveFeedback("lastExportedAt");
 }
 
 function importData(event) {
@@ -2978,3 +3333,4 @@ addEventHandlers();
 renderDynamicSections();
 setActiveView(activeView);
 setActiveCharacterTab(activeCharacterTab);
+renderSaveFeedback();

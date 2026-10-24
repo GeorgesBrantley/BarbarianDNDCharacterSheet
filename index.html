@@ -24,6 +24,8 @@
                 id="globalSearchInput"
                 type="search"
                 placeholder="Search everything..."
+                title="Search everything (0)"
+                aria-keyshortcuts="0"
                 autocomplete="off"
                 aria-controls="globalSearchResults"
                 aria-expanded="false"
@@ -31,15 +33,16 @@
               <div class="global-search-results" id="globalSearchResults" aria-label="Search results" hidden></div>
             </div>
             <div class="view-tabs" role="tablist" aria-label="Sheet views">
-              <button class="view-tab-button active" data-view-tab="sheet" type="button">Character Sheet</button>
-              <button class="view-tab-button" data-view-tab="combat" type="button">Combat</button>
-              <button class="view-tab-button" data-view-tab="notes" type="button">Notes</button>
+              <button class="view-tab-button active" data-view-tab="sheet" type="button" title="Character Sheet (1)" aria-keyshortcuts="1">Character Sheet</button>
+              <button class="view-tab-button" data-view-tab="combat" type="button" title="Combat (2)" aria-keyshortcuts="2">Combat</button>
+              <button class="view-tab-button" data-view-tab="notes" type="button" title="Notes (3)" aria-keyshortcuts="3">Notes</button>
             </div>
           </div>
           <div class="header-utility-actions">
+            <button class="ghost-button" id="timelineButton" type="button" aria-pressed="false" aria-controls="timelinePanel">Timeline</button>
             <button class="ghost-button" id="undoDelete" type="button" hidden>Undo Delete</button>
             <button class="ghost-button" id="restoreBackup" type="button">Restore Backup</button>
-            <button class="ghost-button" id="exportData" type="button">Export to Saves</button>
+            <button class="ghost-button" id="exportData" type="button">Download Sheet</button>
             <label class="ghost-button file-label" for="importData">Import</label>
             <input id="importData" type="file" accept="application/json" />
             <button class="danger-button" id="resetData" type="button">Reset</button>
@@ -506,8 +509,51 @@
           </div>
           <div class="session-notes-list" id="sessionNotesList"></div>
         </section>
+        <section class="panel timeline-panel" id="timelinePanel" data-views="timeline" aria-labelledby="timelineHeading" hidden>
+          <div class="panel-heading">
+            <h2 id="timelineHeading">Session Timeline</h2>
+            <span class="timeline-count" id="timelineCount">0 events</span>
+          </div>
+          <div id="timelineList"></div>
+        </section>
       </main>
+      <footer class="save-feedback" aria-label="Save history">
+        <p>Last saved locally: <time id="lastSavedTime">Not yet</time></p>
+        <p>Last exported: <time id="lastExportedTime">Not yet</time></p>
+      </footer>
     </div>
+
+    <nav class="combat-quick-bar" id="combatQuickBar" aria-label="Combat quick access">
+      <button
+        class="quick-bar-toggle"
+        id="quickBarToggle"
+        type="button"
+        aria-label="Collapse combat quick bar"
+        aria-expanded="true"
+        aria-controls="combatQuickBarContent"
+        title="Collapse combat quick bar"
+      ><span aria-hidden="true">‹</span></button>
+      <div class="quick-bar-content" id="combatQuickBarContent">
+        <button class="quick-bar-health" id="quickBarHealth" type="button" title="Go to the top of Combat">
+          <span class="quick-bar-heart" aria-hidden="true">♥</span>
+          <span class="quick-bar-health-copy">
+            <span class="quick-bar-label">Current HP</span>
+            <span class="quick-bar-hp" aria-live="polite" aria-atomic="true">
+              <strong id="quickBarHpValue">0</strong><span class="quick-bar-hp-total" id="quickBarHpTotal"></span>
+            </span>
+          </span>
+        </button>
+        <button class="quick-bar-rage" id="quickBarRage" type="button" title="Go to Rage in Combat">
+          <span class="quick-bar-rage-mark" aria-hidden="true">◆</span>
+          <span class="quick-bar-health-copy">
+            <span class="quick-bar-label">Rage</span>
+            <strong id="quickBarRageValue" aria-live="polite">Not raging</strong>
+          </span>
+        </button>
+        <div class="quick-bar-favorites" id="quickBarFavorites" aria-label="Favorite attacks and items"></div>
+      </div>
+    </nav>
+    <div class="quick-bar-tooltip" id="quickBarTooltip" role="tooltip" hidden></div>
 
     <dialog class="ac-dialog" id="acDialog" aria-labelledby="acDialogTitle">
       <form class="ac-dialog-form" id="acDialogForm" method="dialog">
